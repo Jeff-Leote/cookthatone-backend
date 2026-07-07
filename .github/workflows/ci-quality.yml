@@ -1,4 +1,4 @@
-name: CI — Quality (Lint)
+name: CI — Quality (Lint & Format)
 
 on:
   push:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint
+    name: Lint & Format
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -33,3 +33,6 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
