@@ -1,0 +1,38 @@
+# compiled output
+/dist
+/node_modules
+/build
+
+# logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# env
+.env
+.env.*
+!.env.example
+
+# coverage
+/coverage
+/.nyc_output
+
+# IDE
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.DS_Store
+
+# Prisma
+prisma/migrations/dev.db
+
+# projet perso — pas du code source
+.claude/
+CookthatOne-Backend-Guide.pdf
