@@ -116,22 +116,31 @@ export class ShoppingService {
   }
 
   async validate(userId: string, id: string) {
-    const list = await this.ensureOwnedList(userId, id);
-    if (list.validated) {
-      throw new ConflictException('Shopping list already validated');
-    }
+    await this.ensureOwnedList(userId, id);
 
-    const items = await this.prisma.shoppingItem.findMany({
-      where: { listId: id, checked: true },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      // Atomically claim the list: only one concurrent validate() call can
+      // flip validated false -> true, since Postgres serializes concurrent
+      // UPDATEs on the same row. A losing call sees count 0 and knows
+      // another request already validated it, before any stock is touched.
+      const claimed = await tx.shoppingList.updateMany({
+        where: { id, validated: false },
+        data: { validated: true },
+      });
+      if (claimed.count === 0) {
+        throw new ConflictException('Shopping list already validated');
+      }
 
-    await this.prisma.$transaction([
-      ...items.map((item) => {
+      const items = await tx.shoppingItem.findMany({
+        where: { listId: id, checked: true },
+      });
+
+      for (const item of items) {
         const purchasedQuantity = Math.max(
           0,
           item.quantityNeeded - item.quantityInStock,
         );
-        return this.prisma.stock.upsert({
+        await tx.stock.upsert({
           where: {
             userId_ingredientId: { userId, ingredientId: item.ingredientId },
           },
@@ -143,12 +152,8 @@ export class ShoppingService {
           },
           update: { quantity: { increment: purchasedQuantity } },
         });
-      }),
-      this.prisma.shoppingList.update({
-        where: { id },
-        data: { validated: true },
-      }),
-    ]);
+      }
+    });
 
     return this.findOne(userId, id);
   }

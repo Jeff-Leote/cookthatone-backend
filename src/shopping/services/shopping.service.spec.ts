@@ -12,6 +12,7 @@ describe('ShoppingService', () => {
       findUnique: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
       delete: jest.Mock;
     };
     shoppingItem: {
@@ -39,6 +40,7 @@ describe('ShoppingService', () => {
         findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
         delete: jest.fn(),
       },
       shoppingItem: {
@@ -49,8 +51,14 @@ describe('ShoppingService', () => {
       calendarEntry: { findMany: jest.fn() },
       stock: { findMany: jest.fn(), upsert: jest.fn() },
       ingredient: { findMany: jest.fn() },
-      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+      $transaction: jest.fn(),
     };
+    // Interactive transaction mock: runs the callback with the same mocked
+    // client, mirroring how a real Prisma transaction hands the callback a
+    // tx client with the same model API.
+    prisma.$transaction.mockImplementation(
+      (callback: (tx: typeof prisma) => Promise<unknown>) => callback(prisma),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -133,6 +141,7 @@ describe('ShoppingService', () => {
       ...ownedList,
       items: [],
     });
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
     prisma.shoppingItem.findMany.mockResolvedValue([
       {
         id: 'item-1',
@@ -145,10 +154,6 @@ describe('ShoppingService', () => {
       },
     ]);
     prisma.stock.upsert.mockResolvedValue({});
-    prisma.shoppingList.update.mockResolvedValue({
-      ...ownedList,
-      validated: true,
-    });
 
     await service.validate('user-1', 'list-1');
 
@@ -164,20 +169,20 @@ describe('ShoppingService', () => {
       }),
     );
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(prisma.shoppingList.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { validated: true } }),
-    );
+    expect(prisma.shoppingList.updateMany).toHaveBeenCalledWith({
+      where: { id: 'list-1', validated: false },
+      data: { validated: true },
+    });
   });
 
-  it('throws ConflictException when validating an already-validated list', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue({
-      ...ownedList,
-      validated: true,
-    });
+  it('throws ConflictException when the atomic claim finds the list already validated', async () => {
+    prisma.shoppingList.findUnique.mockResolvedValue(ownedList);
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.validate('user-1', 'list-1')).rejects.toBeInstanceOf(
       ConflictException,
     );
+    expect(prisma.shoppingItem.findMany).not.toHaveBeenCalled();
     expect(prisma.stock.upsert).not.toHaveBeenCalled();
   });
 });
