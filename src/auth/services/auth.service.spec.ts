@@ -1,6 +1,7 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
+import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { AuthService } from './auth.service';
@@ -70,6 +71,23 @@ describe('AuthService', () => {
       service.register({ email: existingUser.email, password: 'password123' }),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  // Race condition : deux register() concurrents passent tous les deux le
+  // findUnique(), le second create() viole la contrainte unique -> doit
+  // rester une ConflictException (409), pas une erreur Prisma brute
+  it('throws ConflictException when create() hits the unique constraint (concurrent register)', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '7.8.0',
+      }),
+    );
+
+    await expect(
+      service.register({ email: existingUser.email, password: 'password123' }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   // T03: login() avec des credentials valides -> access_token retourne

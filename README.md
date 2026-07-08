@@ -23,9 +23,9 @@ npx prisma migrate dev --name init
 > pas la CI (runners Linux) ni la prod (Docker Linux sur Render).
 >
 > `npx prisma generate` fonctionne normalement sur Windows (il n'ouvre pas de connexion reseau).
-> Pour tout ce qui interroge reellement la base (`prisma migrate`, `npm run start`/`start:dev`,
-> tester les endpoints en local), lancez la commande depuis un conteneur Linux sur le meme reseau
-> Docker :
+> Pour tout ce qui interroge reellement la base (`prisma migrate`, `prisma studio`, `npm run
+> start`/`start:dev`, tester les endpoints en local), lancez la commande depuis un conteneur Linux
+> sur le meme reseau Docker :
 >
 > ```bash
 > docker run --rm --network cookthatone-backend_default \
@@ -44,6 +44,9 @@ npx prisma migrate dev --name init
 npm run start:dev   # hot-reload, localhost:3000
 npx prisma studio    # localhost:5555
 ```
+
+> **Windows** : les deux commandes ci-dessus ouvrent une vraie connexion a Postgres — voir la note
+> Windows dans la section Installation pour le contournement (conteneur Linux / WSL2).
 
 ## Tests
 

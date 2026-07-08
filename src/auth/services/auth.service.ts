@@ -4,10 +4,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { RegisterDto } from '../dtos/register.dto';
 import { LoginDto } from '../dtos/login.dto';
+
+const UNIQUE_CONSTRAINT_VIOLATION = 'P2002';
 
 const SALT_ROUNDS = 10;
 
@@ -27,11 +30,20 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
-    const user = await this.prisma.user.create({
-      data: { email: dto.email, passwordHash },
-    });
-
-    return { access_token: this.signToken(user.id) };
+    try {
+      const user = await this.prisma.user.create({
+        data: { email: dto.email, passwordHash },
+      });
+      return { access_token: this.signToken(user.id) };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === UNIQUE_CONSTRAINT_VIOLATION
+      ) {
+        throw new ConflictException('Email already in use');
+      }
+      throw error;
+    }
   }
 
   async login(dto: LoginDto) {
