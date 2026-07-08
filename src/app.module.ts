@@ -1,9 +1,28 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { PrismaModule } from './prisma/prisma.module';
+import { AuthModule } from './auth/auth.module';
+import { RecipesModule } from './recipes/recipes.module';
+import { IngredientsModule } from './ingredients/ingredients.module';
+import { CalendarModule } from './calendar/calendar.module';
+import { StockModule } from './stock/stock.module';
+import { ShoppingModule } from './shopping/shopping.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 
 @Module({
-  imports: [],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    PrismaModule,
+    AuthModule,
+    RecipesModule,
+    IngredientsModule,
+    CalendarModule,
+    StockModule,
+    ShoppingModule,
+    SchedulerModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })
