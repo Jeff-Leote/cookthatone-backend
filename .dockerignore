@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.git
+.github
+.husky
+.claude
+*.md
+CookthatOne-Backend-Guide.pdf
+.env
