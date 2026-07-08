@@ -1,0 +1,226 @@
+// ============================================================
+// Prisma Schema — Plateforme de gestion de recettes
+// Stack : NestJS + PostgreSQL + Prisma
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum MealSlot {
+  MIDI
+  SOIR
+}
+
+enum Unit {
+  G
+  KG
+  ML
+  L
+  PIECE
+  CUILLERE_A_SOUPE
+  CUILLERE_A_CAFE
+  TASSE
+  PINCEE
+}
+
+// ============================================================
+// USER
+// ============================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  recipes         Recipe[]
+  ingredients     Ingredient[]
+  calendarEntries CalendarEntry[]
+  stocks          Stock[]
+  shoppingLists   ShoppingList[]
+
+  @@map("users")
+}
+
+// ============================================================
+// RECIPE
+// ============================================================
+
+model Recipe {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  title       String
+  description String?
+  prepTimeMin Int?     @map("prep_time_min")
+  cookTimeMin Int?     @map("cook_time_min")
+  servings    Int      @default(2)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipeIngredients     RecipeIngredient[]
+  steps                 RecipeStep[]
+  calendarEntries       CalendarEntry[]    @relation("PlannedRecipe")
+  actualCalendarEntries CalendarEntry[]    @relation("ActualRecipe")
+
+  @@map("recipes")
+}
+
+// ============================================================
+// INGREDIENT (table pivot centrale)
+// ============================================================
+
+model Ingredient {
+  id          String @id @default(uuid())
+  userId      String @map("user_id")
+  name        String
+  defaultUnit Unit   @map("default_unit")
+
+  // Relations
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipeIngredients RecipeIngredient[]
+  stocks            Stock[]
+  shoppingItems     ShoppingItem[]
+
+  // Un utilisateur ne peut pas avoir deux ingrédients avec le même nom
+  @@unique([userId, name])
+  @@map("ingredients")
+}
+
+// ============================================================
+// RECIPE_INGREDIENT (table de liaison recette <-> ingrédient)
+// ============================================================
+
+model RecipeIngredient {
+  id           String @id @default(uuid())
+  recipeId     String @map("recipe_id")
+  ingredientId String @map("ingredient_id")
+  quantity     Float
+  unit         Unit
+
+  // Relations
+  recipe     Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([recipeId, ingredientId])
+  @@map("recipe_ingredients")
+}
+
+// ============================================================
+// RECIPE_STEP
+// ============================================================
+
+model RecipeStep {
+  id          String @id @default(uuid())
+  recipeId    String @map("recipe_id")
+  stepOrder   Int    @map("step_order")
+  instruction String
+
+  // Relations
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId, stepOrder])
+  @@map("recipe_steps")
+}
+
+// ============================================================
+// CALENDAR_ENTRY
+// Deux FK vers Recipe : recette prévue vs recette réellement faite
+// ============================================================
+
+model CalendarEntry {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  recipeId       String    @map("recipe_id")
+  plannedDate    DateTime  @map("planned_date") @db.Date
+  mealSlot       MealSlot  @map("meal_slot")
+  done           Boolean   @default(false)
+  actualRecipeId String?   @map("actual_recipe_id") // null si repas non validé
+  validatedAt    DateTime? @map("validated_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipe       Recipe  @relation("PlannedRecipe", fields: [recipeId], references: [id], onDelete: Restrict)
+  actualRecipe Recipe? @relation("ActualRecipe", fields: [actualRecipeId], references: [id], onDelete: SetNull)
+
+  // Un utilisateur ne peut avoir qu'une recette par créneau par jour
+  @@unique([userId, plannedDate, mealSlot])
+  @@map("calendar_entries")
+}
+
+// ============================================================
+// STOCK
+// ============================================================
+
+model Stock {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  ingredientId String    @map("ingredient_id")
+  quantity     Float
+  unit         Unit
+  expiresAt    DateTime? @map("expires_at") @db.Date
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  // Un seul enregistrement de stock par ingrédient par utilisateur
+  @@unique([userId, ingredientId])
+  @@map("stock")
+}
+
+// ============================================================
+// SHOPPING_LIST
+// ============================================================
+
+model ShoppingList {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  weekStart DateTime @map("week_start") @db.Date
+  validated Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items ShoppingItem[]
+
+  @@map("shopping_lists")
+}
+
+// ============================================================
+// SHOPPING_ITEM
+// quantityNeeded  = total requis par les recettes de la semaine
+// quantityInStock = snapshot du stock au moment de la génération
+// => quantité à acheter = max(0, quantityNeeded - quantityInStock)
+// ============================================================
+
+model ShoppingItem {
+  id              String  @id @default(uuid())
+  listId          String  @map("list_id")
+  ingredientId    String  @map("ingredient_id")
+  quantityNeeded  Float   @map("quantity_needed")
+  quantityInStock Float   @default(0) @map("quantity_in_stock")
+  unit            Unit
+  checked         Boolean @default(false)
+
+  // Relations
+  list       ShoppingList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  ingredient Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([listId, ingredientId])
+  @@map("shopping_items")
+}
