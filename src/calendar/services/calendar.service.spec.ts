@@ -127,5 +127,6 @@ describe('CalendarService', () => {
 
     expect(result.done).toBe(false);
     expect(result.actualRecipeId).toBeNull();
+    expect(result.validatedAt).toBeNull();
   });
 });
