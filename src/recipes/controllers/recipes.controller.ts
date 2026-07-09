@@ -13,6 +13,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../../auth/interfaces/authenticated-request.interface';
 import { RecipesService } from '../services/recipes.service';
@@ -22,6 +23,8 @@ import { RecipeIngredientDto } from '../dtos/recipe-ingredient.dto';
 import { ReplaceRecipeStepsDto } from '../dtos/replace-recipe-steps.dto';
 import { FindRecipesQueryDto } from '../dtos/find-recipes-query.dto';
 
+@ApiTags('recipes')
+@ApiBearerAuth()
 @Controller('recipes')
 @UseGuards(JwtAuthGuard)
 export class RecipesController {

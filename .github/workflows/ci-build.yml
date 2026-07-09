@@ -17,6 +17,22 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cookthatone
+          POSTGRES_PASSWORD: cookthatone
+          POSTGRES_DB: cookthatone
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://cookthatone:cookthatone@localhost:5432/cookthatone?schema=public
 
     steps:
       - name: Checkout
@@ -33,6 +49,9 @@ jobs:
 
       - name: Generate Prisma client
         run: npm run prisma:generate
+
+      - name: Apply migrations
+        run: npm run prisma:migrate:deploy
 
       - name: Build
         run: npm run build

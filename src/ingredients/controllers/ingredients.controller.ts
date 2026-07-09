@@ -10,11 +10,14 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../../auth/interfaces/authenticated-request.interface';
 import { IngredientsService } from '../services/ingredients.service';
 import { CreateIngredientDto } from '../dtos/create-ingredient.dto';
 
+@ApiTags('ingredients')
+@ApiBearerAuth()
 @Controller('ingredients')
 @UseGuards(JwtAuthGuard)
 export class IngredientsController {
