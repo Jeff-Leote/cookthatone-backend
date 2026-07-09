@@ -12,6 +12,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../../auth/interfaces/authenticated-request.interface';
 import { CalendarService } from '../services/calendar.service';
@@ -21,6 +22,8 @@ import { ValidateCalendarEntryDto } from '../dtos/validate-calendar-entry.dto';
 import { FindCalendarWeekDto } from '../dtos/find-calendar-week.dto';
 import { FindCalendarRangeDto } from '../dtos/find-calendar-range.dto';
 
+@ApiTags('calendar')
+@ApiBearerAuth()
 @Controller('calendar')
 @UseGuards(JwtAuthGuard)
 export class CalendarController {

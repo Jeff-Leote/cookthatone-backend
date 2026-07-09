@@ -12,6 +12,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../../auth/interfaces/authenticated-request.interface';
 import { StockService } from '../services/stock.service';
@@ -19,6 +20,8 @@ import { CreateStockDto } from '../dtos/create-stock.dto';
 import { UpdateStockDto } from '../dtos/update-stock.dto';
 import { FindStockQueryDto } from '../dtos/find-stock-query.dto';
 
+@ApiTags('stock')
+@ApiBearerAuth()
 @Controller('stock')
 @UseGuards(JwtAuthGuard)
 export class StockController {
