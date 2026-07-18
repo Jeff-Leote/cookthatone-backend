@@ -22,17 +22,21 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+    const existing = await this.prisma.user.findFirst({
+      where: { OR: [{ email: dto.email }, { pseudo: dto.pseudo }] },
     });
     if (existing) {
-      throw new ConflictException('Email already in use');
+      throw new ConflictException(
+        existing.email === dto.email
+          ? 'Email already in use'
+          : 'Pseudo already in use',
+      );
     }
 
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
     try {
       const user = await this.prisma.user.create({
-        data: { email: dto.email, passwordHash },
+        data: { email: dto.email, pseudo: dto.pseudo, passwordHash },
       });
       return { access_token: this.signToken(user.id) };
     } catch (error) {
@@ -40,7 +44,7 @@ export class AuthService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('Email already in use');
+        throw new ConflictException('Email or pseudo already in use');
       }
       throw error;
     }
@@ -74,6 +78,7 @@ export class AuthService {
     return {
       id: user.id,
       email: user.email,
+      pseudo: user.pseudo,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };
