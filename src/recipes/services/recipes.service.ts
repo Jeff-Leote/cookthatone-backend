@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
+import { RedisService } from '../../redis/services/redis.service';
 import { CreateRecipeDto } from '../dtos/create-recipe.dto';
 import { UpdateRecipeDto } from '../dtos/update-recipe.dto';
 import { RecipeIngredientDto } from '../dtos/recipe-ingredient.dto';
@@ -14,16 +15,27 @@ import { FindRecipesQueryDto } from '../dtos/find-recipes-query.dto';
 
 const UNIQUE_CONSTRAINT_VIOLATION = 'P2002';
 const RECORD_NOT_FOUND = 'P2025';
+const RECIPE_LIST_CACHE_TTL_SECONDS = 30;
 
 @Injectable()
 export class RecipesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
-  findAll(userId: string, query: FindRecipesQueryDto) {
+  async findAll(userId: string, query: FindRecipesQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
+    const cacheKey = `recipes:${userId}:${query.search ?? ''}:${page}:${limit}`;
 
-    return this.prisma.recipe.findMany({
+    const cached =
+      await this.redis.getJson<Prisma.RecipeGetPayload<object>[]>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const recipes = await this.prisma.recipe.findMany({
       where: {
         userId,
         ...(query.search
@@ -34,6 +46,9 @@ export class RecipesService {
       skip: (page - 1) * limit,
       take: limit,
     });
+
+    await this.redis.setJson(cacheKey, recipes, RECIPE_LIST_CACHE_TTL_SECONDS);
+    return recipes;
   }
 
   async findOne(userId: string, id: string) {
