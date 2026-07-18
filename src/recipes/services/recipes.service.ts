@@ -29,9 +29,8 @@ export class RecipesService {
     const limit = query.limit ?? 20;
     const cacheKey = `recipes:${userId}:${query.search ?? ''}:${page}:${limit}`;
 
-    const cached = await this.redis.getJson<Prisma.RecipeGetPayload<object>[]>(
-      cacheKey,
-    );
+    const cached =
+      await this.redis.getJson<Prisma.RecipeGetPayload<object>[]>(cacheKey);
     if (cached) {
       return cached;
     }
