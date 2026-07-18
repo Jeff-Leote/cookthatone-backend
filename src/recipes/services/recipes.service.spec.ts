@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../prisma/services/prisma.service';
+import { RedisService } from '../../redis/services/redis.service';
 import { RecipesService } from './recipes.service';
 
 describe('RecipesService', () => {
@@ -14,6 +15,7 @@ describe('RecipesService', () => {
       delete: jest.Mock;
     };
   };
+  let redis: { getJson: jest.Mock; setJson: jest.Mock };
 
   const ownedRecipe = { id: 'recipe-1', userId: 'user-1', title: 'Tarte' };
 
@@ -27,9 +29,17 @@ describe('RecipesService', () => {
         delete: jest.fn(),
       },
     };
+    redis = {
+      getJson: jest.fn().mockResolvedValue(null),
+      setJson: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [RecipesService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        RecipesService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: RedisService, useValue: redis },
+      ],
     }).compile();
 
     service = module.get<RecipesService>(RecipesService);
@@ -64,6 +74,29 @@ describe('RecipesService', () => {
           title: { contains: 'carb', mode: 'insensitive' },
         },
       }),
+    );
+  });
+
+  // Cache Redis : findAll() sert le résultat en cache sans requêter Prisma
+  it('returns the cached result without querying Prisma on a cache hit', async () => {
+    redis.getJson.mockResolvedValue([ownedRecipe]);
+
+    const result = await service.findAll('user-1', {});
+
+    expect(result).toEqual([ownedRecipe]);
+    expect(prisma.recipe.findMany).not.toHaveBeenCalled();
+  });
+
+  // Cache Redis : findAll() écrit le résultat en cache après une requête réelle
+  it('caches the result after querying Prisma on a cache miss', async () => {
+    prisma.recipe.findMany.mockResolvedValue([ownedRecipe]);
+
+    await service.findAll('user-1', { search: 'carb' });
+
+    expect(redis.setJson).toHaveBeenCalledWith(
+      'recipes:user-1:carb:1:20',
+      [ownedRecipe],
+      30,
     );
   });
 
