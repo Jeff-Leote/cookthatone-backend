@@ -8,11 +8,14 @@ import { AuthService } from './auth.service';
 
 describe('AuthService', () => {
   let service: AuthService;
-  let prisma: { user: { findUnique: jest.Mock; create: jest.Mock } };
+  let prisma: {
+    user: { findUnique: jest.Mock; findFirst: jest.Mock; create: jest.Mock };
+  };
 
   const existingUser = {
     id: 'user-1',
     email: 'jane@example.com',
+    pseudo: 'jane',
     passwordHash: '',
   };
 
@@ -24,6 +27,7 @@ describe('AuthService', () => {
     prisma = {
       user: {
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
         create: jest.fn(),
       },
     };
@@ -46,16 +50,18 @@ describe('AuthService', () => {
     expect(service).toBeDefined();
   });
 
-  // T01: register() avec un email nouveau + password -> access_token retourne
+  // T01: register() avec un email + pseudo nouveaux + password -> access_token retourne
   it('registers a new user and returns an access_token', async () => {
-    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({
       id: 'user-2',
       email: 'new@example.com',
+      pseudo: 'newchef',
     });
 
     const result = await service.register({
       email: 'new@example.com',
+      pseudo: 'newchef',
       password: 'password123',
     });
 
@@ -65,19 +71,37 @@ describe('AuthService', () => {
 
   // T02: register() avec un email deja existant -> ConflictException (409)
   it('throws ConflictException when the email is already registered', async () => {
-    prisma.user.findUnique.mockResolvedValue(existingUser);
+    prisma.user.findFirst.mockResolvedValue(existingUser);
 
     await expect(
-      service.register({ email: existingUser.email, password: 'password123' }),
+      service.register({
+        email: existingUser.email,
+        pseudo: 'anotherpseudo',
+        password: 'password123',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  // register() avec un pseudo deja existant -> ConflictException (409)
+  it('throws ConflictException when the pseudo is already registered', async () => {
+    prisma.user.findFirst.mockResolvedValue(existingUser);
+
+    await expect(
+      service.register({
+        email: 'another@example.com',
+        pseudo: existingUser.pseudo,
+        password: 'password123',
+      }),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 
   // Race condition : deux register() concurrents passent tous les deux le
-  // findUnique(), le second create() viole la contrainte unique -> doit
+  // findFirst(), le second create() viole la contrainte unique -> doit
   // rester une ConflictException (409), pas une erreur Prisma brute
   it('throws ConflictException when create() hits the unique constraint (concurrent register)', async () => {
-    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
         code: 'P2002',
@@ -86,7 +110,11 @@ describe('AuthService', () => {
     );
 
     await expect(
-      service.register({ email: existingUser.email, password: 'password123' }),
+      service.register({
+        email: existingUser.email,
+        pseudo: existingUser.pseudo,
+        password: 'password123',
+      }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
