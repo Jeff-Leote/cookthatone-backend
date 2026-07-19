@@ -34,6 +34,7 @@ export class StockService {
           : {}),
       },
       orderBy: { expiresAt: 'asc' },
+      include: { ingredient: true },
     });
   }
 
@@ -47,6 +48,7 @@ export class StockService {
           unit: dto.unit,
           expiresAt: dto.expiresAt,
         },
+        include: { ingredient: true },
       });
     } catch (error) {
       if (
@@ -61,7 +63,11 @@ export class StockService {
 
   async update(userId: string, id: string, dto: UpdateStockDto) {
     await this.ensureOwnedStock(userId, id);
-    return this.prisma.stock.update({ where: { id }, data: dto });
+    return this.prisma.stock.update({
+      where: { id },
+      data: dto,
+      include: { ingredient: true },
+    });
   }
 
   async remove(userId: string, id: string) {
