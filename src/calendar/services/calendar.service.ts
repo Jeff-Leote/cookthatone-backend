@@ -13,6 +13,13 @@ import { ValidateCalendarEntryDto } from '../dtos/validate-calendar-entry.dto';
 const UNIQUE_CONSTRAINT_VIOLATION = 'P2002';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Le frontend affiche le titre de la recette planifiée (et de la recette
+// réellement cuisinée si elle diffère) sans requête supplémentaire.
+const CALENDAR_ENTRY_INCLUDE = {
+  recipe: true,
+  actualRecipe: true,
+} satisfies Prisma.CalendarEntryInclude;
+
 function startOfWeek(date: Date): Date {
   const start = new Date(date);
   const day = start.getDay();
@@ -33,6 +40,7 @@ export class CalendarService {
     return this.prisma.calendarEntry.findMany({
       where: { userId, plannedDate: { gte: start, lte: end } },
       orderBy: { plannedDate: 'asc' },
+      include: CALENDAR_ENTRY_INCLUDE,
     });
   }
 
@@ -40,6 +48,7 @@ export class CalendarService {
     return this.prisma.calendarEntry.findMany({
       where: { userId, plannedDate: { gte: from, lte: to } },
       orderBy: { plannedDate: 'asc' },
+      include: CALENDAR_ENTRY_INCLUDE,
     });
   }
 
@@ -52,6 +61,7 @@ export class CalendarService {
           plannedDate: dto.plannedDate,
           mealSlot: dto.mealSlot,
         },
+        include: CALENDAR_ENTRY_INCLUDE,
       });
     } catch (error) {
       if (
@@ -71,6 +81,7 @@ export class CalendarService {
       return await this.prisma.calendarEntry.update({
         where: { id },
         data: { plannedDate: dto.plannedDate, mealSlot: dto.mealSlot },
+        include: CALENDAR_ENTRY_INCLUDE,
       });
     } catch (error) {
       if (
@@ -95,6 +106,7 @@ export class CalendarService {
           : null,
         validatedAt: dto.done ? new Date() : null,
       },
+      include: CALENDAR_ENTRY_INCLUDE,
     });
   }
 
