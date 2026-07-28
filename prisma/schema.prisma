@@ -37,12 +37,13 @@ enum Unit {
 // ============================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  pseudo       String   @unique
-  passwordHash String   @map("password_hash")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id            String   @id @default(uuid())
+  email         String   @unique
+  pseudo        String   @unique
+  passwordHash  String   @map("password_hash")
+  emailVerified Boolean  @default(false) @map("email_verified")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   // Relations
   recipes         Recipe[]
