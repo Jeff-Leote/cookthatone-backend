@@ -28,8 +28,8 @@ export class AuthService {
     if (existing) {
       throw new ConflictException(
         existing.email === dto.email
-          ? 'Email already in use'
-          : 'Pseudo already in use',
+          ? 'Cette adresse email est déjà utilisée'
+          : 'Ce pseudo est déjà pris',
       );
     }
 
@@ -44,7 +44,9 @@ export class AuthService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('Email or pseudo already in use');
+        throw new ConflictException(
+          'Cette adresse email ou ce pseudo est déjà utilisé',
+        );
       }
       throw error;
     }
@@ -55,7 +57,9 @@ export class AuthService {
       where: { email: dto.email },
     });
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException(
+        'Les informations entrées sont incorrectes',
+      );
     }
 
     const passwordMatches = await bcrypt.compare(
@@ -63,7 +67,9 @@ export class AuthService {
       user.passwordHash,
     );
     if (!passwordMatches) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException(
+        'Les informations entrées sont incorrectes',
+      );
     }
 
     return { access_token: this.signToken(user.id) };
@@ -72,7 +78,9 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new UnauthorizedException();
+      throw new UnauthorizedException(
+        'Session invalide, merci de te reconnecter',
+      );
     }
 
     return {

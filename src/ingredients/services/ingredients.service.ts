@@ -31,7 +31,9 @@ export class IngredientsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('Ingredient already exists');
+        throw new ConflictException(
+          'Cet ingrédient existe déjà dans ton catalogue',
+        );
       }
       throw error;
     }
@@ -42,7 +44,7 @@ export class IngredientsService {
       where: { id },
     });
     if (!ingredient || ingredient.userId !== userId) {
-      throw new NotFoundException('Ingredient not found');
+      throw new NotFoundException('Ingrédient introuvable');
     }
 
     try {
@@ -53,7 +55,7 @@ export class IngredientsService {
         error.code === FOREIGN_KEY_CONSTRAINT_VIOLATION
       ) {
         throw new ConflictException(
-          'Ingredient is used in a recipe or in the stock',
+          'Cet ingrédient est utilisé dans une recette ou ton stock, impossible de le supprimer',
         );
       }
       throw error;

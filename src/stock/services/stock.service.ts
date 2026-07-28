@@ -55,7 +55,7 @@ export class StockService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('This ingredient is already in stock');
+        throw new ConflictException('Cet ingrédient est déjà dans ton stock');
       }
       throw error;
     }
@@ -78,10 +78,10 @@ export class StockService {
   private async ensureOwnedStock(userId: string, id: string) {
     const stock = await this.prisma.stock.findUnique({ where: { id } });
     if (!stock) {
-      throw new NotFoundException('Stock entry not found');
+      throw new NotFoundException('Article de stock introuvable');
     }
     if (stock.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException("Tu n'as pas accès à cet article de stock");
     }
     return stock;
   }
