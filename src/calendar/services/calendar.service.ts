@@ -68,7 +68,7 @@ export class CalendarService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('This slot is already taken');
+        throw new ConflictException('Ce créneau est déjà occupé');
       }
       throw error;
     }
@@ -88,7 +88,7 @@ export class CalendarService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('This slot is already taken');
+        throw new ConflictException('Ce créneau est déjà occupé');
       }
       throw error;
     }
@@ -120,10 +120,10 @@ export class CalendarService {
       where: { id },
     });
     if (!entry) {
-      throw new NotFoundException('Calendar entry not found');
+      throw new NotFoundException('Repas introuvable dans le calendrier');
     }
     if (entry.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException("Tu n'as pas accès à ce repas");
     }
     return entry;
   }

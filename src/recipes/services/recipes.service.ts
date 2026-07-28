@@ -60,10 +60,10 @@ export class RecipesService {
       },
     });
     if (!recipe) {
-      throw new NotFoundException('Recipe not found');
+      throw new NotFoundException('Recette introuvable');
     }
     if (recipe.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException("Tu n'as pas accès à cette recette");
     }
     return recipe;
   }
@@ -134,7 +134,7 @@ export class RecipesService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('Ingredient already added to this recipe');
+        throw new ConflictException('Cet ingrédient est déjà dans la recette');
       }
       throw error;
     }
@@ -156,7 +156,9 @@ export class RecipesService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === RECORD_NOT_FOUND
       ) {
-        throw new NotFoundException('Ingredient not found on this recipe');
+        throw new NotFoundException(
+          'Cet ingrédient ne fait pas partie de la recette',
+        );
       }
       throw error;
     }
@@ -189,10 +191,10 @@ export class RecipesService {
   private async ensureOwnedRecipe(userId: string, id: string) {
     const recipe = await this.prisma.recipe.findUnique({ where: { id } });
     if (!recipe) {
-      throw new NotFoundException('Recipe not found');
+      throw new NotFoundException('Recette introuvable');
     }
     if (recipe.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException("Tu n'as pas accès à cette recette");
     }
     return recipe;
   }

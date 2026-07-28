@@ -28,10 +28,12 @@ export class ShoppingService {
       include: { items: { include: { ingredient: true } } },
     });
     if (!list) {
-      throw new NotFoundException('Shopping list not found');
+      throw new NotFoundException('Liste de courses introuvable');
     }
     if (list.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(
+        "Tu n'as pas accès à cette liste de courses",
+      );
     }
     return list;
   }
@@ -106,7 +108,9 @@ export class ShoppingService {
       where: { id: itemId },
     });
     if (!item || item.listId !== listId) {
-      throw new NotFoundException('Shopping item not found');
+      throw new NotFoundException(
+        'Article introuvable dans la liste de courses',
+      );
     }
 
     return this.prisma.shoppingItem.update({
@@ -128,7 +132,7 @@ export class ShoppingService {
         data: { validated: true },
       });
       if (claimed.count === 0) {
-        throw new ConflictException('Shopping list already validated');
+        throw new ConflictException('Cette liste de courses est déjà validée');
       }
 
       const items = await tx.shoppingItem.findMany({
@@ -166,10 +170,12 @@ export class ShoppingService {
   private async ensureOwnedList(userId: string, id: string) {
     const list = await this.prisma.shoppingList.findUnique({ where: { id } });
     if (!list) {
-      throw new NotFoundException('Shopping list not found');
+      throw new NotFoundException('Liste de courses introuvable');
     }
     if (list.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(
+        "Tu n'as pas accès à cette liste de courses",
+      );
     }
     return list;
   }

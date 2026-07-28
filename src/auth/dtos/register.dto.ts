@@ -7,7 +7,8 @@ export class RegisterDto {
   @IsString()
   @Length(3, 20)
   @Matches(/^[a-zA-Z0-9_]+$/, {
-    message: 'pseudo must contain only letters, numbers and underscores',
+    message:
+      'Le pseudo ne doit contenir que des lettres, chiffres et underscores',
   })
   pseudo: string;
 
