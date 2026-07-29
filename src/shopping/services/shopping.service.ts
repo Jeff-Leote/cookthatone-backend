@@ -152,6 +152,54 @@ export class ShoppingService {
           },
           update: { quantity: { increment: purchasedQuantity } },
         });
+        // On enregistre la quantite exacte ajoutee au stock, pour pouvoir
+        // l'annuler precisement si la liste est devalidee plus tard (le
+        // stock peut avoir change depuis, ex: consommation via le calendrier).
+        await tx.shoppingItem.update({
+          where: { id: item.id },
+          data: { purchasedQuantity },
+        });
+      }
+    });
+
+    return this.findOne(userId, id);
+  }
+
+  async unvalidate(userId: string, id: string) {
+    await this.ensureOwnedList(userId, id);
+
+    await this.prisma.$transaction(async (tx) => {
+      // Meme principe de claim atomique que validate(), en sens inverse.
+      const claimed = await tx.shoppingList.updateMany({
+        where: { id, validated: true },
+        data: { validated: false },
+      });
+      if (claimed.count === 0) {
+        throw new ConflictException('Shopping list is not validated');
+      }
+
+      const items = await tx.shoppingItem.findMany({
+        where: { listId: id, purchasedQuantity: { gt: 0 } },
+      });
+
+      for (const item of items) {
+        const stock = await tx.stock.findUnique({
+          where: {
+            userId_ingredientId: { userId, ingredientId: item.ingredientId },
+          },
+        });
+        if (stock) {
+          await tx.stock.update({
+            where: { id: stock.id },
+            data: {
+              quantity: Math.max(0, stock.quantity - item.purchasedQuantity),
+            },
+          });
+        }
+        await tx.shoppingItem.update({
+          where: { id: item.id },
+          data: { purchasedQuantity: 0 },
+        });
       }
     });
 

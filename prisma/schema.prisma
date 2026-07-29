@@ -95,6 +95,7 @@ model Ingredient {
   recipeIngredients RecipeIngredient[]
   stocks            Stock[]
   shoppingItems     ShoppingItem[]
+  calendarConsumptions CalendarEntryConsumption[]
 
   // Un utilisateur ne peut pas avoir deux ingrédients avec le même nom
   @@unique([userId, name])
@@ -157,10 +158,33 @@ model CalendarEntry {
   user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   recipe       Recipe  @relation("PlannedRecipe", fields: [recipeId], references: [id], onDelete: Restrict)
   actualRecipe Recipe? @relation("ActualRecipe", fields: [actualRecipeId], references: [id], onDelete: SetNull)
+  consumptions CalendarEntryConsumption[]
 
   // Un utilisateur ne peut avoir qu'une recette par créneau par jour
   @@unique([userId, plannedDate, mealSlot])
   @@map("calendar_entries")
+}
+
+// ============================================================
+// CALENDAR_ENTRY_CONSUMPTION
+// Quantite reellement retiree du stock quand un repas est valide.
+// Necessaire pour pouvoir remettre exactement cette quantite au stock
+// si le repas est devalide (le stock peut avoir change entre-temps).
+// ============================================================
+
+model CalendarEntryConsumption {
+  id              String @id @default(uuid())
+  calendarEntryId String @map("calendar_entry_id")
+  ingredientId    String @map("ingredient_id")
+  quantity        Float
+  unit            Unit
+
+  // Relations
+  calendarEntry CalendarEntry @relation(fields: [calendarEntryId], references: [id], onDelete: Cascade)
+  ingredient    Ingredient    @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([calendarEntryId, ingredientId])
+  @@map("calendar_entry_consumptions")
 }
 
 // ============================================================
@@ -211,13 +235,17 @@ model ShoppingList {
 // ============================================================
 
 model ShoppingItem {
-  id              String  @id @default(uuid())
-  listId          String  @map("list_id")
-  ingredientId    String  @map("ingredient_id")
-  quantityNeeded  Float   @map("quantity_needed")
-  quantityInStock Float   @default(0) @map("quantity_in_stock")
-  unit            Unit
-  checked         Boolean @default(false)
+  id                 String  @id @default(uuid())
+  listId             String  @map("list_id")
+  ingredientId       String  @map("ingredient_id")
+  quantityNeeded     Float   @map("quantity_needed")
+  quantityInStock    Float   @default(0) @map("quantity_in_stock")
+  unit               Unit
+  checked            Boolean @default(false)
+  // Quantite reellement ajoutee au stock lors de la validation de la liste.
+  // Permet de "devalider" la liste en retirant exactement ce qui a ete ajoute,
+  // meme si le stock a change depuis (ex: consommation via le calendrier).
+  purchasedQuantity  Float   @default(0) @map("purchased_quantity")
 
   // Relations
   list       ShoppingList @relation(fields: [listId], references: [id], onDelete: Cascade)
