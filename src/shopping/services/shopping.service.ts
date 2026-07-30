@@ -42,6 +42,15 @@ export class ShoppingService {
       weekStart.getTime() + WEEK_LENGTH_DAYS * MS_PER_DAY,
     );
 
+    const existing = await this.prisma.shoppingList.findUnique({
+      where: { userId_weekStart: { userId, weekStart } },
+    });
+    if (existing?.validated) {
+      throw new ConflictException(
+        'Cette liste de courses est déjà validée, dévalidez-la avant de la régénérer',
+      );
+    }
+
     const entries = await this.prisma.calendarEntry.findMany({
       where: { userId, plannedDate: { gte: weekStart, lte: weekEnd } },
       include: { recipe: { include: { recipeIngredients: true } } },
@@ -83,6 +92,20 @@ export class ShoppingService {
         unit: unitByIngredient.get(ingredientId)!,
       }))
       .filter((item) => item.quantityInStock < item.quantityNeeded);
+
+    if (existing) {
+      // Une liste (non validee) existe deja pour cette semaine : on la
+      // remplace plutot que d'en creer une seconde, pour respecter la
+      // contrainte d'unicite (une liste par semaine par utilisateur).
+      return this.prisma.$transaction(async (tx) => {
+        await tx.shoppingItem.deleteMany({ where: { listId: existing.id } });
+        return tx.shoppingList.update({
+          where: { id: existing.id },
+          data: { items: items.length ? { create: items } : undefined },
+          include: { items: { include: { ingredient: true } } },
+        });
+      });
+    }
 
     return this.prisma.shoppingList.create({
       data: {

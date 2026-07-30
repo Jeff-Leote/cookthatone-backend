@@ -224,6 +224,10 @@ model ShoppingList {
   user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   items ShoppingItem[]
 
+  // Une seule liste de courses par semaine par utilisateur : evite qu'une
+  // regeneration cree une liste en double, ce qui permettait de valider
+  // deux listes distinctes pour la meme semaine et de doubler le stock.
+  @@unique([userId, weekStart])
   @@map("shopping_lists")
 }
 
