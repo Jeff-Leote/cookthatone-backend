@@ -63,6 +63,11 @@ export class ShoppingController {
     return this.shoppingService.validate(req.user.userId, id);
   }
 
+  @Post(':id/unvalidate')
+  unvalidate(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+    return this.shoppingService.unvalidate(req.user.userId, id);
+  }
+
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
