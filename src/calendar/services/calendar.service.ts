@@ -64,6 +64,7 @@ export class CalendarService {
           recipeId: dto.recipeId,
           plannedDate: dto.plannedDate,
           mealSlot: dto.mealSlot,
+          servings: dto.servings,
         },
         include: CALENDAR_ENTRY_INCLUDE,
       });
@@ -112,7 +113,13 @@ export class CalendarService {
       await this.restoreConsumption(tx, userId, id);
 
       const deficits = willBeDone
-        ? await this.consumeForRecipe(tx, userId, id, actualRecipeId!)
+        ? await this.consumeForRecipe(
+            tx,
+            userId,
+            id,
+            actualRecipeId!,
+            entry.servings,
+          )
         : [];
 
       const updated = await tx.calendarEntry.update({
@@ -189,7 +196,17 @@ export class CalendarService {
     userId: string,
     calendarEntryId: string,
     recipeId: string,
+    servings: number,
   ): Promise<StockDeficit[]> {
+    const recipe = await tx.recipe.findUnique({
+      where: { id: recipeId },
+      select: { servings: true },
+    });
+    // Les quantites de la recette sont definies pour son nombre de portions
+    // de base ; on les met a l'echelle du nombre de portions confirme pour
+    // ce repas.
+    const ratio = servings / (recipe?.servings ?? 1);
+
     const recipeIngredients = await tx.recipeIngredient.findMany({
       where: { recipeId },
       include: { ingredient: true },
@@ -197,6 +214,7 @@ export class CalendarService {
 
     const deficits: StockDeficit[] = [];
     for (const recipeIngredient of recipeIngredients) {
+      const neededQuantity = recipeIngredient.quantity * ratio;
       const stock = await tx.stock.findUnique({
         where: {
           userId_ingredientId: {
@@ -206,8 +224,8 @@ export class CalendarService {
         },
       });
       const available = stock?.quantity ?? 0;
-      const consumed = Math.min(available, recipeIngredient.quantity);
-      const missing = recipeIngredient.quantity - consumed;
+      const consumed = Math.min(available, neededQuantity);
+      const missing = neededQuantity - consumed;
 
       if (consumed > 0 && stock) {
         await tx.stock.update({

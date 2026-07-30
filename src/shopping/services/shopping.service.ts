@@ -58,11 +58,15 @@ export class ShoppingService {
 
     const neededByIngredient = new Map<string, number>();
     for (const entry of entries) {
+      // Les quantites de la recette sont definies pour son nombre de
+      // portions de base ; on les met a l'echelle du nombre de portions
+      // choisi pour ce repas precis.
+      const ratio = entry.servings / entry.recipe.servings;
       for (const recipeIngredient of entry.recipe.recipeIngredients) {
         neededByIngredient.set(
           recipeIngredient.ingredientId,
           (neededByIngredient.get(recipeIngredient.ingredientId) ?? 0) +
-            recipeIngredient.quantity,
+            recipeIngredient.quantity * ratio,
         );
       }
     }

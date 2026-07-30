@@ -1,15 +1,19 @@
 import { Type } from 'class-transformer';
-import { IsDate, IsEnum, IsUUID } from 'class-validator';
+import { IsDate, IsEnum, IsInt, IsUUID, Min } from 'class-validator';
 import { MealSlot } from '@prisma/client';
 
 export class CreateCalendarEntryDto {
   @IsUUID()
-  recipeId: string;
+  recipeId!: string;
 
   @Type(() => Date)
   @IsDate()
-  plannedDate: Date;
+  plannedDate!: Date;
 
   @IsEnum(MealSlot)
-  mealSlot: MealSlot;
+  mealSlot!: MealSlot;
+
+  @IsInt()
+  @Min(1)
+  servings!: number;
 }
