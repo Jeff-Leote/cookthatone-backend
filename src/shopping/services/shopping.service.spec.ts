@@ -19,6 +19,7 @@ describe('ShoppingService', () => {
       findUnique: jest.Mock;
       update: jest.Mock;
       findMany: jest.Mock;
+      deleteMany: jest.Mock;
     };
     calendarEntry: { findMany: jest.Mock };
     stock: {
@@ -52,6 +53,7 @@ describe('ShoppingService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
         findMany: jest.fn(),
+        deleteMany: jest.fn(),
       },
       calendarEntry: { findMany: jest.fn() },
       stock: {
@@ -143,6 +145,54 @@ describe('ShoppingService', () => {
     });
 
     expect(result.items).toEqual([]);
+  });
+
+  // generate() replaces the existing (unvalidated) list for the week
+  // instead of creating a second one, to keep the userId+weekStart
+  // uniqueness invariant that prevents double-counted validations.
+  it('replaces the items of an existing unvalidated list instead of creating a new one', async () => {
+    prisma.shoppingList.findUnique.mockResolvedValue({
+      ...ownedList,
+      validated: false,
+    });
+    prisma.calendarEntry.findMany.mockResolvedValue([
+      {
+        recipe: {
+          recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
+        },
+      },
+    ]);
+    prisma.stock.findMany.mockResolvedValue([]);
+    prisma.ingredient.findMany.mockResolvedValue([
+      { id: 'ingredient-1', defaultUnit: Unit.G },
+    ]);
+    prisma.shoppingItem.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.shoppingList.update.mockImplementation(
+      (args: { data: { items?: { create: unknown[] } } }) =>
+        Promise.resolve({ ...ownedList, items: args.data.items?.create ?? [] }),
+    );
+
+    await service.generate('user-1', { weekStart: new Date('2026-07-06') });
+
+    expect(prisma.shoppingItem.deleteMany).toHaveBeenCalledWith({
+      where: { listId: 'list-1' },
+    });
+    expect(prisma.shoppingList.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'list-1' } }),
+    );
+    expect(prisma.shoppingList.create).not.toHaveBeenCalled();
+  });
+
+  it('throws ConflictException when regenerating an already validated list', async () => {
+    prisma.shoppingList.findUnique.mockResolvedValue({
+      ...ownedList,
+      validated: true,
+    });
+
+    await expect(
+      service.generate('user-1', { weekStart: new Date('2026-07-06') }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.calendarEntry.findMany).not.toHaveBeenCalled();
   });
 
   // T17: validate() items coches -> $transaction + stock mis a jour
