@@ -149,6 +149,10 @@ model CalendarEntry {
   recipeId       String    @map("recipe_id")
   plannedDate    DateTime  @map("planned_date") @db.Date
   mealSlot       MealSlot  @map("meal_slot")
+  // Nombre de portions confirme au moment de la planification (par defaut
+  // celui de la recette, mais ajustable par repas). Sert a mettre a
+  // l'echelle les quantites d'ingredients pour ce repas precis.
+  servings       Int       @default(1)
   done           Boolean   @default(false)
   actualRecipeId String?   @map("actual_recipe_id") // null si repas non validé
   validatedAt    DateTime? @map("validated_at")

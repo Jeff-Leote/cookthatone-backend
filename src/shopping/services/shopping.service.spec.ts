@@ -90,7 +90,9 @@ describe('ShoppingService', () => {
   it('generates items for ingredients the stock does not fully cover', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        servings: 2,
         recipe: {
+          servings: 2,
           recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
         },
       },
@@ -124,7 +126,9 @@ describe('ShoppingService', () => {
   it('produces no items when the stock covers every need', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        servings: 2,
         recipe: {
+          servings: 2,
           recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
         },
       },
@@ -147,6 +151,42 @@ describe('ShoppingService', () => {
     expect(result.items).toEqual([]);
   });
 
+  // Les portions choisies pour un repas peuvent differer des portions de
+  // base de la recette : les quantites necessaires doivent suivre le ratio.
+  it('scales ingredient quantities by the servings chosen for each meal', async () => {
+    prisma.calendarEntry.findMany.mockResolvedValue([
+      {
+        servings: 4, // recette prevue pour 2, mais 4 portions demandees
+        recipe: {
+          servings: 2,
+          recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
+        },
+      },
+    ]);
+    prisma.stock.findMany.mockResolvedValue([]);
+    prisma.ingredient.findMany.mockResolvedValue([
+      { id: 'ingredient-1', defaultUnit: Unit.G },
+    ]);
+    prisma.shoppingList.create.mockImplementation(
+      (args: { data: { items?: { create: unknown[] } } }) =>
+        Promise.resolve({ ...ownedList, items: args.data.items?.create ?? [] }),
+    );
+
+    const result = await service.generate('user-1', {
+      weekStart: new Date('2026-07-06'),
+    });
+
+    // ratio 4/2 = 2 -> 500 devient 1000
+    expect(result.items).toEqual([
+      {
+        ingredientId: 'ingredient-1',
+        quantityNeeded: 1000,
+        quantityInStock: 0,
+        unit: Unit.G,
+      },
+    ]);
+  });
+
   // generate() replaces the existing (unvalidated) list for the week
   // instead of creating a second one, to keep the userId+weekStart
   // uniqueness invariant that prevents double-counted validations.
@@ -157,7 +197,9 @@ describe('ShoppingService', () => {
     });
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        servings: 2,
         recipe: {
+          servings: 2,
           recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
         },
       },

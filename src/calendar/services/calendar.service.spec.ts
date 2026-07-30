@@ -21,6 +21,7 @@ describe('CalendarService', () => {
       deleteMany: jest.Mock;
       upsert: jest.Mock;
     };
+    recipe: { findUnique: jest.Mock };
     recipeIngredient: { findMany: jest.Mock };
     stock: { findUnique: jest.Mock; update: jest.Mock; upsert: jest.Mock };
     user: { findUnique: jest.Mock };
@@ -33,6 +34,7 @@ describe('CalendarService', () => {
     recipeId: 'recipe-1',
     plannedDate: new Date('2026-07-06'),
     mealSlot: MealSlot.MIDI,
+    servings: 2,
     done: false,
     actualRecipeId: null,
   };
@@ -51,6 +53,7 @@ describe('CalendarService', () => {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         upsert: jest.fn().mockResolvedValue({}),
       },
+      recipe: { findUnique: jest.fn().mockResolvedValue({ servings: 2 }) },
       recipeIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       stock: {
         findUnique: jest.fn().mockResolvedValue(null),
@@ -92,6 +95,7 @@ describe('CalendarService', () => {
       recipeId: 'recipe-1',
       plannedDate: ownedEntry.plannedDate,
       mealSlot: MealSlot.MIDI,
+      servings: 2,
     });
 
     expect(result).toEqual(ownedEntry);
@@ -111,6 +115,7 @@ describe('CalendarService', () => {
         recipeId: 'recipe-1',
         plannedDate: ownedEntry.plannedDate,
         mealSlot: MealSlot.MIDI,
+        servings: 2,
       }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
@@ -228,6 +233,48 @@ describe('CalendarService', () => {
       update: { quantity: 200 },
     });
     expect(emailService.sendInsufficientStockEmail).not.toHaveBeenCalled();
+  });
+
+  // Les portions choisies pour ce repas peuvent differer des portions de
+  // base de la recette : les quantites consommees doivent suivre le ratio.
+  it('scales the consumed quantities by the chosen servings', async () => {
+    prisma.calendarEntry.findUnique.mockResolvedValue({
+      ...ownedEntry,
+      servings: 4, // recette prevue pour 2, mais 4 portions demandees ici
+    });
+    prisma.calendarEntry.update.mockImplementation(
+      (args: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          ...ownedEntry,
+          ...args.data,
+          recipe: { title: 'Recette' },
+          actualRecipe: null,
+        }),
+    );
+    prisma.recipe.findUnique.mockResolvedValue({ servings: 2 });
+    prisma.recipeIngredient.findMany.mockResolvedValue([
+      {
+        ingredientId: 'ingredient-1',
+        quantity: 200,
+        unit: Unit.G,
+        ingredient: { name: 'Farine' },
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      userId: 'user-1',
+      ingredientId: 'ingredient-1',
+      quantity: 1000,
+      unit: Unit.G,
+    });
+
+    await service.validate('user-1', 'entry-1', { done: true });
+
+    // ratio 4/2 = 2 -> 200g de base devient 400g consommes
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 600 },
+    });
   });
 
   // Quand le stock ne couvre pas toute la recette, on consomme ce qui est
