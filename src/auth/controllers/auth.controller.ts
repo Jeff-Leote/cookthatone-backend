@@ -12,11 +12,16 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from '../services/auth.service';
 import { RegisterDto } from '../dtos/register.dto';
 import { LoginDto } from '../dtos/login.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../interfaces/authenticated-request.interface';
+
+// 5 tentatives par minute et par IP : limite dediee contre le brute-force
+// sur les identifiants, plus stricte que la limite globale de l'API.
+const BRUTE_FORCE_THROTTLE = { default: { limit: 5, ttl: 60000 } };
 
 @ApiTags('auth')
 @Controller('auth')
@@ -24,12 +29,14 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
+  @Throttle(BRUTE_FORCE_THROTTLE)
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle(BRUTE_FORCE_THROTTLE)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
