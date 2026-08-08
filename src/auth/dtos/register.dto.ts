@@ -1,17 +1,22 @@
 import { IsEmail, IsString, Length, Matches, MinLength } from 'class-validator';
 
 export class RegisterDto {
-  @IsEmail()
+  @IsEmail({}, { message: "L'adresse email n'est pas valide" })
   email: string;
 
-  @IsString()
-  @Length(3, 20)
-  @Matches(/^[a-zA-Z0-9_]+$/, {
-    message: 'pseudo must contain only letters, numbers and underscores',
+  @IsString({ message: 'Le pseudo doit être une chaîne de caractères' })
+  @Length(3, 20, {
+    message: 'Le pseudo doit contenir entre 3 et 20 caractères',
+  })
+  @Matches(/^\w+$/, {
+    message:
+      'Le pseudo ne peut contenir que des lettres, chiffres et underscores',
   })
   pseudo: string;
 
-  @IsString()
-  @MinLength(8)
+  @IsString({ message: 'Le mot de passe doit être une chaîne de caractères' })
+  @MinLength(8, {
+    message: 'Le mot de passe doit contenir au moins 8 caractères',
+  })
   password: string;
 }
