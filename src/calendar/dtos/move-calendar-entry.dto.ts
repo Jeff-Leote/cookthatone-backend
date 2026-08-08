@@ -4,9 +4,9 @@ import { MealSlot } from '@prisma/client';
 
 export class MoveCalendarEntryDto {
   @Type(() => Date)
-  @IsDate()
+  @IsDate({ message: 'La date planifiée doit être une date valide' })
   plannedDate: Date;
 
-  @IsEnum(MealSlot)
+  @IsEnum(MealSlot, { message: "Le créneau de repas n'est pas valide" })
   mealSlot: MealSlot;
 }

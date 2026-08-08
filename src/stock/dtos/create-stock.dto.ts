@@ -10,18 +10,18 @@ import {
 import { Unit } from '@prisma/client';
 
 export class CreateStockDto {
-  @IsUUID()
+  @IsUUID('4', { message: "L'identifiant de l'ingrédient n'est pas valide" })
   ingredientId: string;
 
-  @IsNumber()
-  @IsPositive()
+  @IsNumber({}, { message: 'La quantité doit être un nombre' })
+  @IsPositive({ message: 'La quantité doit être positive' })
   quantity: number;
 
-  @IsEnum(Unit)
+  @IsEnum(Unit, { message: "L'unité n'est pas valide" })
   unit: Unit;
 
   @IsOptional()
   @Type(() => Date)
-  @IsDate()
+  @IsDate({ message: "La date d'expiration doit être une date valide" })
   expiresAt?: Date;
 }

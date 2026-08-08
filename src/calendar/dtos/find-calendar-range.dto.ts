@@ -3,10 +3,10 @@ import { IsDate } from 'class-validator';
 
 export class FindCalendarRangeDto {
   @Type(() => Date)
-  @IsDate()
-  from: Date;
+  @IsDate({ message: 'La date de début doit être une date valide' })
+  from!: Date;
 
   @Type(() => Date)
-  @IsDate()
-  to: Date;
+  @IsDate({ message: 'La date de fin doit être une date valide' })
+  to!: Date;
 }

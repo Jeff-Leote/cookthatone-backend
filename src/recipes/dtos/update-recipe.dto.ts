@@ -9,26 +9,26 @@ import {
 
 export class UpdateRecipeDto {
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
+  @IsString({ message: 'Le titre doit être une chaîne de caractères' })
+  @IsNotEmpty({ message: 'Le titre ne peut pas être vide' })
   title?: string;
 
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'La description doit être une chaîne de caractères' })
   description?: string;
 
   @IsOptional()
-  @IsInt()
-  @Min(0)
+  @IsInt({ message: 'Le temps de préparation doit être un entier' })
+  @Min(0, { message: 'Le temps de préparation ne peut pas être négatif' })
   prepTimeMin?: number;
 
   @IsOptional()
-  @IsInt()
-  @Min(0)
+  @IsInt({ message: 'Le temps de cuisson doit être un entier' })
+  @Min(0, { message: 'Le temps de cuisson ne peut pas être négatif' })
   cookTimeMin?: number;
 
   @IsOptional()
-  @IsInt()
-  @IsPositive()
+  @IsInt({ message: 'Le nombre de portions doit être un entier' })
+  @IsPositive({ message: 'Le nombre de portions doit être positif' })
   servings?: number;
 }

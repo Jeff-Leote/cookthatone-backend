@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -9,7 +10,23 @@ import { GenerateShoppingListDto } from '../dtos/generate-shopping-list.dto';
 import { UpdateShoppingItemDto } from '../dtos/update-shopping-item.dto';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const WEEK_LENGTH_DAYS = 6;
+
+// Le nom de la contrainte d'exclusion GiST posee en migration (voir
+// prisma/migrations/*_shopping_list_date_range) : filet de securite si deux
+// requetes concurrentes passent toutes les deux le pre-check applicatif.
+const NO_OVERLAP_CONSTRAINT = 'shopping_lists_no_overlap';
+
+function formatDateFr(date: Date): string {
+  return new Intl.DateTimeFormat('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date);
+}
+
+function toIsoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
 
 @Injectable()
 export class ShoppingService {
@@ -18,7 +35,7 @@ export class ShoppingService {
   findAll(userId: string) {
     return this.prisma.shoppingList.findMany({
       where: { userId },
-      orderBy: { weekStart: 'desc' },
+      orderBy: { periodStart: 'desc' },
     });
   }
 
@@ -37,13 +54,40 @@ export class ShoppingService {
   }
 
   async generate(userId: string, dto: GenerateShoppingListDto) {
-    const weekStart = dto.weekStart;
-    const weekEnd = new Date(
-      weekStart.getTime() + WEEK_LENGTH_DAYS * MS_PER_DAY,
-    );
+    const { periodStart, periodEnd } = dto;
+    if (periodEnd < periodStart) {
+      throw new BadRequestException(
+        'La date de fin doit être postérieure ou égale à la date de début',
+      );
+    }
 
-    const existing = await this.prisma.shoppingList.findUnique({
-      where: { userId_weekStart: { userId, weekStart } },
+    const entries = await this.prisma.calendarEntry.findMany({
+      where: { userId, plannedDate: { gte: periodStart, lte: periodEnd } },
+      include: { recipe: { include: { recipeIngredients: true } } },
+    });
+
+    // Chaque jour de la plage doit avoir au moins un repas programme : une
+    // liste de courses n'a pas de sens pour un jour sans recette planifiee.
+    const plannedDays = new Set(
+      entries.map((entry) => toIsoDate(entry.plannedDate)),
+    );
+    const dayCount =
+      Math.round((periodEnd.getTime() - periodStart.getTime()) / MS_PER_DAY) +
+      1;
+    for (let i = 0; i < dayCount; i++) {
+      const day = new Date(periodStart.getTime() + i * MS_PER_DAY);
+      if (!plannedDays.has(toIsoDate(day))) {
+        throw new BadRequestException(
+          `Le ${formatDateFr(day)} n'a pas de recette programmée`,
+        );
+      }
+    }
+
+    // Reutilise la liste existante si la plage est exactement identique
+    // (regeneration), sinon verifie qu'aucune autre liste du meme
+    // utilisateur ne couvre deja un jour de cette plage.
+    const existing = await this.prisma.shoppingList.findFirst({
+      where: { userId, periodStart, periodEnd },
     });
     if (existing?.validated) {
       throw new ConflictException(
@@ -51,10 +95,19 @@ export class ShoppingService {
       );
     }
 
-    const entries = await this.prisma.calendarEntry.findMany({
-      where: { userId, plannedDate: { gte: weekStart, lte: weekEnd } },
-      include: { recipe: { include: { recipeIngredients: true } } },
+    const overlapping = await this.prisma.shoppingList.findFirst({
+      where: {
+        userId,
+        ...(existing ? { id: { not: existing.id } } : {}),
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
     });
+    if (overlapping) {
+      throw new ConflictException(
+        `Cette période chevauche une liste de courses existante (${formatDateFr(overlapping.periodStart)} au ${formatDateFr(overlapping.periodEnd)})`,
+      );
+    }
 
     const neededByIngredient = new Map<string, number>();
     for (const entry of entries) {
@@ -98,9 +151,8 @@ export class ShoppingService {
       .filter((item) => item.quantityInStock < item.quantityNeeded);
 
     if (existing) {
-      // Une liste (non validee) existe deja pour cette semaine : on la
-      // remplace plutot que d'en creer une seconde, pour respecter la
-      // contrainte d'unicite (une liste par semaine par utilisateur).
+      // Une liste (non validee) existe deja pour exactement cette plage : on
+      // la remplace plutot que d'en creer une seconde.
       return this.prisma.$transaction(async (tx) => {
         await tx.shoppingItem.deleteMany({ where: { listId: existing.id } });
         return tx.shoppingList.update({
@@ -111,14 +163,31 @@ export class ShoppingService {
       });
     }
 
-    return this.prisma.shoppingList.create({
-      data: {
-        userId,
-        weekStart,
-        items: items.length ? { create: items } : undefined,
-      },
-      include: { items: { include: { ingredient: true } } },
-    });
+    try {
+      return await this.prisma.shoppingList.create({
+        data: {
+          userId,
+          periodStart,
+          periodEnd,
+          items: items.length ? { create: items } : undefined,
+        },
+        include: { items: { include: { ingredient: true } } },
+      });
+    } catch (error) {
+      // Filet de securite : deux requetes concurrentes ont pu passer toutes
+      // les deux le pre-check de chevauchement ci-dessus avant qu'aucune
+      // n'ait ecrit ; la contrainte d'exclusion GiST bloque la seconde au
+      // niveau base, on la traduit juste en message clair.
+      if (
+        error instanceof Error &&
+        error.message.includes(NO_OVERLAP_CONSTRAINT)
+      ) {
+        throw new ConflictException(
+          'Cette période chevauche une liste de courses existante',
+        );
+      }
+      throw error;
+    }
   }
 
   async updateItemChecked(

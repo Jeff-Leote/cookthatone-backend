@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Unit } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
@@ -10,6 +10,7 @@ describe('ShoppingService', () => {
     shoppingList: {
       findMany: jest.Mock;
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
@@ -35,7 +36,8 @@ describe('ShoppingService', () => {
   const ownedList = {
     id: 'list-1',
     userId: 'user-1',
-    weekStart: new Date('2026-07-06'),
+    periodStart: new Date('2026-07-06'),
+    periodEnd: new Date('2026-07-06'),
     validated: false,
   };
 
@@ -43,7 +45,8 @@ describe('ShoppingService', () => {
     prisma = {
       shoppingList: {
         findMany: jest.fn(),
-        findUnique: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue(ownedList),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
@@ -86,10 +89,11 @@ describe('ShoppingService', () => {
     expect(service).toBeDefined();
   });
 
-  // T15: generate() stock insuffisant pour la semaine -> items avec qte manquante
+  // T15: generate() stock insuffisant pour la periode -> items avec qte manquante
   it('generates items for ingredients the stock does not fully cover', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        plannedDate: new Date('2026-07-06'),
         servings: 2,
         recipe: {
           servings: 2,
@@ -109,7 +113,8 @@ describe('ShoppingService', () => {
     );
 
     const result = await service.generate('user-1', {
-      weekStart: new Date('2026-07-06'),
+      periodStart: new Date('2026-07-06'),
+      periodEnd: new Date('2026-07-06'),
     });
 
     expect(result.items).toEqual([
@@ -126,6 +131,7 @@ describe('ShoppingService', () => {
   it('produces no items when the stock covers every need', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        plannedDate: new Date('2026-07-06'),
         servings: 2,
         recipe: {
           servings: 2,
@@ -145,7 +151,8 @@ describe('ShoppingService', () => {
     );
 
     const result = await service.generate('user-1', {
-      weekStart: new Date('2026-07-06'),
+      periodStart: new Date('2026-07-06'),
+      periodEnd: new Date('2026-07-06'),
     });
 
     expect(result.items).toEqual([]);
@@ -156,6 +163,7 @@ describe('ShoppingService', () => {
   it('scales ingredient quantities by the servings chosen for each meal', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        plannedDate: new Date('2026-07-06'),
         servings: 4, // recette prevue pour 2, mais 4 portions demandees
         recipe: {
           servings: 2,
@@ -173,7 +181,8 @@ describe('ShoppingService', () => {
     );
 
     const result = await service.generate('user-1', {
-      weekStart: new Date('2026-07-06'),
+      periodStart: new Date('2026-07-06'),
+      periodEnd: new Date('2026-07-06'),
     });
 
     // ratio 4/2 = 2 -> 500 devient 1000
@@ -187,16 +196,50 @@ describe('ShoppingService', () => {
     ]);
   });
 
-  // generate() replaces the existing (unvalidated) list for the week
-  // instead of creating a second one, to keep the userId+weekStart
-  // uniqueness invariant that prevents double-counted validations.
-  it('replaces the items of an existing unvalidated list instead of creating a new one', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue({
-      ...ownedList,
-      validated: false,
-    });
+  it('throws BadRequestException when periodEnd is before periodStart', async () => {
+    await expect(
+      service.generate('user-1', {
+        periodStart: new Date('2026-07-10'),
+        periodEnd: new Date('2026-07-06'),
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.calendarEntry.findMany).not.toHaveBeenCalled();
+  });
+
+  // Demande explicite : verifier que chaque jour de la plage a une recette
+  // programmee, sinon erreur nommant le jour manquant.
+  it('throws BadRequestException naming the day with no planned recipe', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
+        plannedDate: new Date('2026-08-08'),
+        servings: 2,
+        recipe: { servings: 2, recipeIngredients: [] },
+      },
+      // 9 aout absent : aucune entree pour ce jour
+      {
+        plannedDate: new Date('2026-08-10'),
+        servings: 2,
+        recipe: { servings: 2, recipeIngredients: [] },
+      },
+    ]);
+
+    await expect(
+      service.generate('user-1', {
+        periodStart: new Date('2026-08-08'),
+        periodEnd: new Date('2026-08-10'),
+      }),
+    ).rejects.toThrow("Le 9 août 2026 n'a pas de recette programmée");
+  });
+
+  // generate() replaces the existing (unvalidated) list for the exact same
+  // period instead of creating a second one.
+  it('replaces the items of an existing unvalidated list for the same exact period', async () => {
+    prisma.shoppingList.findFirst
+      .mockResolvedValueOnce({ ...ownedList, validated: false }) // exact match
+      .mockResolvedValueOnce(null); // no other overlap
+    prisma.calendarEntry.findMany.mockResolvedValue([
+      {
+        plannedDate: new Date('2026-07-06'),
         servings: 2,
         recipe: {
           servings: 2,
@@ -214,7 +257,10 @@ describe('ShoppingService', () => {
         Promise.resolve({ ...ownedList, items: args.data.items?.create ?? [] }),
     );
 
-    await service.generate('user-1', { weekStart: new Date('2026-07-06') });
+    await service.generate('user-1', {
+      periodStart: new Date('2026-07-06'),
+      periodEnd: new Date('2026-07-06'),
+    });
 
     expect(prisma.shoppingItem.deleteMany).toHaveBeenCalledWith({
       where: { listId: 'list-1' },
@@ -226,23 +272,56 @@ describe('ShoppingService', () => {
   });
 
   it('throws ConflictException when regenerating an already validated list', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue({
+    prisma.calendarEntry.findMany.mockResolvedValue([
+      {
+        plannedDate: new Date('2026-07-06'),
+        servings: 2,
+        recipe: { servings: 2, recipeIngredients: [] },
+      },
+    ]);
+    prisma.shoppingList.findFirst.mockResolvedValueOnce({
       ...ownedList,
       validated: true,
     });
 
     await expect(
-      service.generate('user-1', { weekStart: new Date('2026-07-06') }),
+      service.generate('user-1', {
+        periodStart: new Date('2026-07-06'),
+        periodEnd: new Date('2026-07-06'),
+      }),
     ).rejects.toBeInstanceOf(ConflictException);
-    expect(prisma.calendarEntry.findMany).not.toHaveBeenCalled();
+    expect(prisma.shoppingList.create).not.toHaveBeenCalled();
+  });
+
+  // Demande explicite : deux listes ne doivent jamais pouvoir couvrir un
+  // meme jour (double comptage du stock si les deux sont validees).
+  it('throws ConflictException when the period overlaps an existing list', async () => {
+    prisma.calendarEntry.findMany.mockResolvedValue([
+      {
+        plannedDate: new Date('2026-08-10'),
+        servings: 2,
+        recipe: { servings: 2, recipeIngredients: [] },
+      },
+    ]);
+    prisma.shoppingList.findFirst
+      .mockResolvedValueOnce(null) // pas de correspondance exacte
+      .mockResolvedValueOnce({
+        id: 'list-2',
+        periodStart: new Date('2026-08-08'),
+        periodEnd: new Date('2026-08-15'),
+      }); // chevauchement
+
+    await expect(
+      service.generate('user-1', {
+        periodStart: new Date('2026-08-10'),
+        periodEnd: new Date('2026-08-10'),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.shoppingList.create).not.toHaveBeenCalled();
   });
 
   // T17: validate() items coches -> $transaction + stock mis a jour
   it('validates checked items through a transaction and updates the stock', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue({
-      ...ownedList,
-      items: [],
-    });
     prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
     prisma.shoppingItem.findMany.mockResolvedValue([
       {
@@ -283,7 +362,6 @@ describe('ShoppingService', () => {
   });
 
   it('throws ConflictException when the atomic claim finds the list already validated', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue(ownedList);
     prisma.shoppingList.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.validate('user-1', 'list-1')).rejects.toBeInstanceOf(
@@ -295,10 +373,6 @@ describe('ShoppingService', () => {
 
   // unvalidate() reverses exactly the stock that was added at validation time
   it('reverses the purchased quantity when unvalidating a list', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue({
-      ...ownedList,
-      validated: true,
-    });
     prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
     prisma.shoppingItem.findMany.mockResolvedValue([
       {
@@ -334,7 +408,6 @@ describe('ShoppingService', () => {
   });
 
   it('throws ConflictException when the atomic claim finds the list not validated', async () => {
-    prisma.shoppingList.findUnique.mockResolvedValue(ownedList);
     prisma.shoppingList.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.unvalidate('user-1', 'list-1')).rejects.toBeInstanceOf(
