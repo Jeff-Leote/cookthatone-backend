@@ -218,20 +218,22 @@ model Stock {
 // ============================================================
 
 model ShoppingList {
-  id        String   @id @default(uuid())
-  userId    String   @map("user_id")
-  weekStart DateTime @map("week_start") @db.Date
-  validated Boolean  @default(false)
-  createdAt DateTime @default(now()) @map("created_at")
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  periodStart DateTime @map("period_start") @db.Date
+  periodEnd   DateTime @map("period_end") @db.Date
+  validated   Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
 
   // Relations
   user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   items ShoppingItem[]
 
-  // Une seule liste de courses par semaine par utilisateur : evite qu'une
-  // regeneration cree une liste en double, ce qui permettait de valider
-  // deux listes distinctes pour la meme semaine et de doubler le stock.
-  @@unique([userId, weekStart])
+  // Empeche deux listes du meme utilisateur de couvrir un jour en commun
+  // (validerait deux fois le meme besoin et doublerait le stock). Contrainte
+  // d'exclusion GiST plutot qu'un simple @@unique : la plage est libre, pas
+  // alignee sur une semaine fixe. Ajoutee a la main dans la migration SQL,
+  // Prisma ne modelise pas les contraintes EXCLUDE.
   @@map("shopping_lists")
 }
 
