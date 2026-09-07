@@ -6,14 +6,17 @@ import {
   IsString,
   Min,
 } from 'class-validator';
+import { Sanitize } from '../../common/decorators/sanitize.decorator';
 
 export class UpdateRecipeDto {
   @IsOptional()
+  @Sanitize()
   @IsString({ message: 'Le titre doit être une chaîne de caractères' })
   @IsNotEmpty({ message: 'Le titre ne peut pas être vide' })
   title?: string;
 
   @IsOptional()
+  @Sanitize()
   @IsString({ message: 'La description doit être une chaîne de caractères' })
   description?: string;
 

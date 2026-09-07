@@ -9,15 +9,18 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { Sanitize } from '../../common/decorators/sanitize.decorator';
 import { RecipeIngredientDto } from './recipe-ingredient.dto';
 import { RecipeStepDto } from './recipe-step.dto';
 
 export class CreateRecipeDto {
+  @Sanitize()
   @IsString({ message: 'Le titre doit être une chaîne de caractères' })
   @IsNotEmpty({ message: 'Le titre est requis' })
   title: string;
 
   @IsOptional()
+  @Sanitize()
   @IsString({ message: 'La description doit être une chaîne de caractères' })
   description?: string;
 
