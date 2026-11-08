@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -7,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
+import { convertQuantity, incompatibleUnitMessage } from '../../common/units';
 import { CreateStockDto } from '../dtos/create-stock.dto';
 import { UpdateStockDto } from '../dtos/update-stock.dto';
 import { FindStockQueryDto } from '../dtos/find-stock-query.dto';
@@ -40,13 +42,41 @@ export class StockService {
   }
 
   async create(userId: string, dto: CreateStockDto) {
+    const ingredient = await this.prisma.ingredient.findFirst({
+      where: { id: dto.ingredientId, userId },
+    });
+    if (!ingredient) {
+      throw new NotFoundException('Ingrédient introuvable');
+    }
+
+    // L'unité de l'ingrédient est définitive : le stock y est toujours
+    // enregistré, quelle que soit l'unité compatible saisie.
+    const quantity = convertQuantity(
+      dto.quantity,
+      dto.unit,
+      ingredient.defaultUnit,
+      ingredient.gramsPerTablespoon,
+    );
+    if (quantity === null) {
+      throw new BadRequestException(
+        incompatibleUnitMessage(
+          dto.unit,
+          ingredient.name,
+          ingredient.defaultUnit,
+        ),
+      );
+    }
+    if (quantity <= 0) {
+      throw new BadRequestException('La quantité est trop petite');
+    }
+
     try {
       return await this.prisma.stock.create({
         data: {
           userId,
           ingredientId: dto.ingredientId,
-          quantity: dto.quantity,
-          unit: dto.unit,
+          quantity,
+          unit: ingredient.defaultUnit,
           expiresAt: dto.expiresAt,
         },
         include: { ingredient: true },

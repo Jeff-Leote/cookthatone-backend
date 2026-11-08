@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -15,6 +16,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../../auth/interfaces/authenticated-request.interface';
 import { IngredientsService } from '../services/ingredients.service';
 import { CreateIngredientDto } from '../dtos/create-ingredient.dto';
+import { UpdateIngredientDto } from '../dtos/update-ingredient.dto';
 
 @ApiTags('ingredients')
 @ApiBearerAuth()
@@ -31,6 +33,15 @@ export class IngredientsController {
   @Post()
   create(@Req() req: AuthenticatedRequest, @Body() dto: CreateIngredientDto) {
     return this.ingredientsService.create(req.user.userId, dto);
+  }
+
+  @Patch(':id')
+  update(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() dto: UpdateIngredientDto,
+  ) {
+    return this.ingredientsService.update(req.user.userId, id, dto);
   }
 
   @Delete(':id')

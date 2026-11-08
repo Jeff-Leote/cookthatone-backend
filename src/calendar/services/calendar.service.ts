@@ -2,11 +2,13 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
+import { convertQuantity, roundQuantity, unitLabel } from '../../common/units';
 import { EmailService, StockDeficit } from '../../email/services/email.service';
 import { CreateCalendarEntryDto } from '../dtos/create-calendar-entry.dto';
 import { MoveCalendarEntryDto } from '../dtos/move-calendar-entry.dto';
@@ -33,6 +35,8 @@ function startOfWeek(date: Date): Date {
 
 @Injectable()
 export class CalendarService {
+  private readonly logger = new Logger(CalendarService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
@@ -215,7 +219,6 @@ export class CalendarService {
 
     const deficits: StockDeficit[] = [];
     for (const recipeIngredient of recipeIngredients) {
-      const neededQuantity = recipeIngredient.quantity * ratio;
       const stock = await tx.stock.findUnique({
         where: {
           userId_ingredientId: {
@@ -224,9 +227,32 @@ export class CalendarService {
           },
         },
       });
+
+      // Le stock est la référence : le besoin est converti dans son unité.
+      // Sans stock, rien à consommer et le manque garde l'unité de la recette.
+      let neededQuantity = recipeIngredient.quantity * ratio;
+      let unit = recipeIngredient.unit;
+      if (stock) {
+        const converted = convertQuantity(
+          neededQuantity,
+          recipeIngredient.unit,
+          stock.unit,
+          recipeIngredient.ingredient.gramsPerTablespoon,
+        );
+        if (converted === null) {
+          // La validation d'un repas n'est jamais bloquée : on laisse le stock
+          // intact plutôt que de retirer des quantités sans rapport.
+          this.logger.warn(
+            `Unités incompatibles pour « ${recipeIngredient.ingredient.name} » : ${unitLabel(recipeIngredient.unit)} dans la recette, ${unitLabel(stock.unit)} en stock`,
+          );
+          continue;
+        }
+        neededQuantity = converted;
+        unit = stock.unit;
+      }
       const available = stock?.quantity ?? 0;
       const consumed = Math.min(available, neededQuantity);
-      const missing = neededQuantity - consumed;
+      const missing = roundQuantity(neededQuantity - consumed);
 
       if (consumed > 0 && stock) {
         const remaining = available - consumed;
@@ -249,7 +275,7 @@ export class CalendarService {
             calendarEntryId,
             ingredientId: recipeIngredient.ingredientId,
             quantity: consumed,
-            unit: recipeIngredient.unit,
+            unit,
           },
           update: { quantity: consumed },
         });
@@ -259,7 +285,7 @@ export class CalendarService {
         deficits.push({
           ingredientName: recipeIngredient.ingredient.name,
           missing,
-          unit: recipeIngredient.unit,
+          unit,
         });
       }
     }

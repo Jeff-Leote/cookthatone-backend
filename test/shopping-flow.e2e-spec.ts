@@ -34,6 +34,15 @@ interface StockEntry {
   ingredient: { name: string };
   quantity: number;
 }
+interface StockEntryWithUnit extends StockEntry {
+  unit: string;
+}
+interface ShoppingItemWithIngredient {
+  quantityNeeded: number;
+  quantityInStock: number;
+  unit: string;
+  ingredient: { name: string };
+}
 
 // Tests d'intégration + tests système + tests de sécurité (CP9) sur le
 // flux le plus représentatif du projet : inscription -> planification ->
@@ -399,6 +408,318 @@ describe('Parcours liste de courses (e2e)', () => {
         .get(`/shopping/${shoppingListId}`)
         .set('Authorization', `Bearer ${token2}`)
         .expect(403);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Unités cohérentes : l'unité d'un ingrédient est définitive, recettes
+  // et stock s'y alignent, la liste de courses compare dans cette unité.
+  // -------------------------------------------------------------------
+  describe('Unités cohérentes entre recette, stock et liste de courses', () => {
+    const day3 = new Date(Date.now() + 12 * 24 * 60 * 60 * 1000);
+    let rizId: string;
+    let laitId: string;
+
+    it("enregistre un stock saisi en kg dans l'unité de l'ingrédient (g)", async () => {
+      const rizRes = await request(server)
+        .post('/ingredients')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ name: 'Riz e2e', defaultUnit: 'G' })
+        .expect(201);
+      const laitRes = await request(server)
+        .post('/ingredients')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ name: 'Lait e2e', defaultUnit: 'ML' })
+        .expect(201);
+      rizId = body<EntityId>(rizRes).id;
+      laitId = body<EntityId>(laitRes).id;
+
+      const stockRes = await request(server)
+        .post('/stock')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ ingredientId: rizId, quantity: 1, unit: 'KG' })
+        .expect(201);
+      const stock = body<StockEntryWithUnit>(stockRes);
+      expect(stock.quantity).toBe(1000);
+      expect(stock.unit).toBe('G');
+    });
+
+    it("refuse un stock dans une unité sans équivalent avec celle de l'ingrédient (400)", async () => {
+      const res = await request(server)
+        .post('/stock')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ ingredientId: laitId, quantity: 2, unit: 'PIECE' })
+        .expect(400);
+      expect(String(body<ErrorResponse>(res).message)).toContain(
+        "n'est pas compatible avec « Lait e2e » (ml)",
+      );
+    });
+
+    it("refuse une ligne de recette dans une unité sans équivalent avec celle de l'ingrédient (400)", async () => {
+      const res = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Riz refusé e2e',
+          ingredients: [{ ingredientId: rizId, quantity: 1, unit: 'L' }],
+        })
+        .expect(400);
+      expect(String(body<ErrorResponse>(res).message)).toContain(
+        "n'est pas compatible avec « Riz e2e » (g)",
+      );
+    });
+
+    it("refuse un ingrédient qui n'appartient pas à l'utilisateur (404)", async () => {
+      await request(server)
+        .post('/stock')
+        .set('Authorization', `Bearer ${token2}`)
+        .send({ ingredientId: rizId, quantity: 1, unit: 'KG' })
+        .expect(404);
+    });
+
+    it("convertit le stock quand l'unité de l'ingrédient change dans la même famille (g vers kg)", async () => {
+      const res = await request(server)
+        .patch(`/ingredients/${rizId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ defaultUnit: 'KG' })
+        .expect(200);
+      expect(body<{ defaultUnit: string }>(res).defaultUnit).toBe('KG');
+
+      const stock = await request(server)
+        .get('/stock')
+        .set('Authorization', `Bearer ${token1}`)
+        .expect(200);
+      const riz = body<StockEntryWithUnit[]>(stock).find(
+        (s) => s.ingredient.name === 'Riz e2e',
+      );
+      expect(riz?.quantity).toBe(1);
+      expect(riz?.unit).toBe('KG');
+
+      // Retour en g : le stock repasse à 1000 g (la suite du scénario part de là).
+      await request(server)
+        .patch(`/ingredients/${rizId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ defaultUnit: 'G' })
+        .expect(200);
+    });
+
+    it('refuse de changer de famille un ingrédient utilisé, sans équivalent possible (409)', async () => {
+      const res = await request(server)
+        .patch(`/ingredients/${rizId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ defaultUnit: 'ML' })
+        .expect(409);
+      expect(String(body<ErrorResponse>(res).message)).toContain(
+        'il est utilisé',
+      );
+    });
+
+    it("refuse de modifier l'ingrédient d'un autre utilisateur (404)", async () => {
+      await request(server)
+        .patch(`/ingredients/${rizId}`)
+        .set('Authorization', `Bearer ${token2}`)
+        .send({ defaultUnit: 'KG' })
+        .expect(404);
+    });
+
+    it('génère la liste en comparant le besoin (kg) au stock converti (g)', async () => {
+      const recipeRes = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Riz au lait e2e',
+          servings: 2,
+          ingredients: [
+            { ingredientId: rizId, quantity: 1.5, unit: 'KG' },
+            { ingredientId: laitId, quantity: 2, unit: 'CUILLERE_A_SOUPE' },
+          ],
+        })
+        .expect(201);
+      const riceRecipeId = body<EntityId>(recipeRes).id;
+
+      await request(server)
+        .post('/calendar')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          recipeId: riceRecipeId,
+          plannedDate: isoDate(day3),
+          mealSlot: 'SOIR',
+          servings: 2,
+        })
+        .expect(201);
+
+      const listRes = await request(server)
+        .post('/shopping/generate')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ periodStart: isoDate(day3), periodEnd: isoDate(day3) })
+        .expect(201);
+      const items = body<{ items: ShoppingItemWithIngredient[] }>(
+        listRes,
+      ).items;
+      const byName = new Map(items.map((i) => [i.ingredient.name, i]));
+
+      const riz = byName.get('Riz e2e');
+      expect(riz?.quantityNeeded).toBe(1500);
+      expect(riz?.quantityInStock).toBe(1000);
+      expect(riz?.unit).toBe('G');
+
+      const lait = byName.get('Lait e2e');
+      expect(lait?.quantityNeeded).toBe(30);
+      expect(lait?.quantityInStock).toBe(0);
+      expect(lait?.unit).toBe('ML');
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Équivalence par ingrédient : une cuillère à soupe pèse X g, ce qui
+  // relie les grammes aux cuillères pour le stock et la liste de courses.
+  // -------------------------------------------------------------------
+  describe('Équivalence poids / cuillère par ingrédient', () => {
+    const day4 = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    let farineId: string;
+
+    it('crée une farine avec 500 g en stock', async () => {
+      const res = await request(server)
+        .post('/ingredients')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ name: 'Farine cuillère e2e', defaultUnit: 'G' })
+        .expect(201);
+      farineId = body<EntityId>(res).id;
+
+      await request(server)
+        .post('/stock')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ ingredientId: farineId, quantity: 500, unit: 'G' })
+        .expect(201);
+    });
+
+    it("refuse un volume (cl) tant que l'équivalence n'est pas renseignée (400)", async () => {
+      const res = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Gâteau refusé e2e',
+          ingredients: [{ ingredientId: farineId, quantity: 1, unit: 'CL' }],
+        })
+        .expect(400);
+      expect(String(body<ErrorResponse>(res).message)).toContain(
+        "renseigne d'abord son équivalence",
+      );
+    });
+
+    it('accepte une cuillère à soupe sans équivalence (repli de 15 g)', async () => {
+      await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Cuillère sans équivalence e2e',
+          ingredients: [
+            { ingredientId: farineId, quantity: 1, unit: 'CUILLERE_A_SOUPE' },
+          ],
+        })
+        .expect(201);
+    });
+
+    it("renseigne l'équivalence : 1 cuillère à soupe de farine = 10 g", async () => {
+      const res = await request(server)
+        .patch(`/ingredients/${farineId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ gramsPerTablespoon: 10 })
+        .expect(200);
+      expect(body<{ gramsPerTablespoon: number }>(res).gramsPerTablespoon).toBe(
+        10,
+      );
+    });
+
+    it('convertit le stock en ml puis en g quand l’unité change de famille avec l’équivalence', async () => {
+      await request(server)
+        .patch(`/ingredients/${farineId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ defaultUnit: 'ML' })
+        .expect(200);
+      let stock = await request(server)
+        .get('/stock')
+        .set('Authorization', `Bearer ${token1}`)
+        .expect(200);
+      let farine = body<StockEntryWithUnit[]>(stock).find(
+        (s) => s.ingredient.name === 'Farine cuillère e2e',
+      );
+      // 10 g pour 15 ml : 500 g = 750 ml
+      expect(farine?.quantity).toBe(750);
+      expect(farine?.unit).toBe('ML');
+
+      await request(server)
+        .patch(`/ingredients/${farineId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ defaultUnit: 'G' })
+        .expect(200);
+      stock = await request(server)
+        .get('/stock')
+        .set('Authorization', `Bearer ${token1}`)
+        .expect(200);
+      farine = body<StockEntryWithUnit[]>(stock).find(
+        (s) => s.ingredient.name === 'Farine cuillère e2e',
+      );
+      expect(farine?.quantity).toBe(500);
+      expect(farine?.unit).toBe('G');
+    });
+
+    it('refuse deux lignes du même ingrédient dans une recette (400)', async () => {
+      const res = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Doublon e2e',
+          ingredients: [
+            { ingredientId: farineId, quantity: 600, unit: 'G' },
+            { ingredientId: farineId, quantity: 3, unit: 'CUILLERE_A_SOUPE' },
+          ],
+        })
+        .expect(400);
+      expect(String(body<ErrorResponse>(res).message)).toContain(
+        'apparaît plusieurs fois',
+      );
+    });
+
+    it('compare 63 cuillères à soupe (630 g) au stock de 500 g', async () => {
+      const recipeRes = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Gâteau e2e',
+          servings: 2,
+          ingredients: [
+            { ingredientId: farineId, quantity: 63, unit: 'CUILLERE_A_SOUPE' },
+          ],
+        })
+        .expect(201);
+
+      await request(server)
+        .post('/calendar')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          recipeId: body<EntityId>(recipeRes).id,
+          plannedDate: isoDate(day4),
+          mealSlot: 'SOIR',
+          servings: 2,
+        })
+        .expect(201);
+
+      const listRes = await request(server)
+        .post('/shopping/generate')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ periodStart: isoDate(day4), periodEnd: isoDate(day4) })
+        .expect(201);
+      const items = body<{ items: ShoppingItemWithIngredient[] }>(
+        listRes,
+      ).items;
+      const farine = items.find(
+        (i) => i.ingredient.name === 'Farine cuillère e2e',
+      );
+
+      expect(farine?.quantityNeeded).toBe(630);
+      expect(farine?.quantityInStock).toBe(500);
+      expect(farine?.unit).toBe('G');
     });
   });
 });

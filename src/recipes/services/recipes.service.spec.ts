@@ -1,5 +1,10 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { Unit } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { RedisService } from '../../redis/services/redis.service';
 import { RecipesService } from './recipes.service';
@@ -14,6 +19,8 @@ describe('RecipesService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
+    recipeIngredient: { create: jest.Mock };
+    ingredient: { findMany: jest.Mock };
   };
   let redis: {
     getJson: jest.Mock;
@@ -31,6 +38,16 @@ describe('RecipesService', () => {
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+      },
+      recipeIngredient: { create: jest.fn() },
+      ingredient: {
+        // L'unité de l'ingrédient est définitive : les lignes de recette doivent
+        // être dans une unité compatible.
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { id: 'ingredient-1', name: 'Oeuf', defaultUnit: Unit.PIECE },
+          ]),
       },
     };
     redis = {
@@ -151,6 +168,69 @@ describe('RecipesService', () => {
     expect(redis.deleteByPrefix).toHaveBeenCalledWith('recipes:user-1:');
   });
 
+  it('rejects a recipe line whose unit has no equivalent in the ingredient unit', async () => {
+    await expect(
+      service.create('user-1', {
+        title: 'Tarte',
+        ingredients: [
+          {
+            ingredientId: 'ingredient-1',
+            quantity: 200,
+            unit: Unit.G,
+          },
+        ],
+      }),
+    ).rejects.toThrow("L'unité g n'est pas compatible avec « Oeuf » (pièce)");
+    expect(prisma.recipe.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a recipe line that uses an ingredient of another user', async () => {
+    prisma.ingredient.findMany.mockResolvedValue([]);
+
+    await expect(
+      service.create('user-1', {
+        title: 'Tarte',
+        ingredients: [
+          { ingredientId: 'ingredient-9', quantity: 1, unit: Unit.PIECE },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.recipe.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a compatible unit different from the ingredient unit', async () => {
+    prisma.ingredient.findMany.mockResolvedValue([
+      { id: 'ingredient-2', name: 'Lait', defaultUnit: Unit.ML },
+    ]);
+    prisma.recipe.create.mockResolvedValue({ ...ownedRecipe });
+
+    await service.create('user-1', {
+      title: 'Crêpes',
+      ingredients: [
+        {
+          ingredientId: 'ingredient-2',
+          quantity: 2,
+          unit: Unit.CUILLERE_A_SOUPE,
+        },
+      ],
+    });
+
+    expect(prisma.recipe.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks the unit when adding an ingredient to an existing recipe', async () => {
+    prisma.recipe.findUnique.mockResolvedValue(ownedRecipe);
+
+    await expect(
+      service.addIngredient('user-1', 'recipe-1', {
+        ingredientId: 'ingredient-1',
+        quantity: 3,
+        unit: Unit.KG,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.recipeIngredient.create).not.toHaveBeenCalled();
+  });
+
   it('throws ForbiddenException on update() for a recipe owned by another user', async () => {
     prisma.recipe.findUnique.mockResolvedValue({
       ...ownedRecipe,
@@ -196,5 +276,104 @@ describe('RecipesService', () => {
       ForbiddenException,
     );
     expect(redis.deleteByPrefix).not.toHaveBeenCalled();
+  });
+  it('accepts spoons for a weight ingredient that has an equivalence', async () => {
+    prisma.ingredient.findMany.mockResolvedValue([
+      {
+        id: 'ingredient-3',
+        name: 'Farine',
+        defaultUnit: Unit.G,
+        gramsPerTablespoon: 10,
+      },
+    ]);
+    prisma.recipe.create.mockResolvedValue({ ...ownedRecipe });
+
+    await service.create('user-1', {
+      title: 'Gâteau',
+      ingredients: [
+        {
+          ingredientId: 'ingredient-3',
+          quantity: 1,
+          unit: Unit.CUILLERE_A_SOUPE,
+        },
+      ],
+    });
+
+    expect(prisma.recipe.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts spoons for a weight ingredient without equivalence (universal fallback)', async () => {
+    prisma.ingredient.findMany.mockResolvedValue([
+      {
+        id: 'ingredient-3',
+        name: 'Farine',
+        defaultUnit: Unit.G,
+        gramsPerTablespoon: null,
+      },
+    ]);
+    prisma.recipe.create.mockResolvedValue({ ...ownedRecipe });
+
+    await service.create('user-1', {
+      title: 'Gâteau',
+      ingredients: [
+        {
+          ingredientId: 'ingredient-3',
+          quantity: 1,
+          unit: Unit.CUILLERE_A_CAFE,
+        },
+      ],
+    });
+
+    expect(prisma.recipe.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for the equivalence when a volume other than a spoon is used for a weight ingredient without one', async () => {
+    prisma.ingredient.findMany.mockResolvedValue([
+      {
+        id: 'ingredient-3',
+        name: 'Farine',
+        defaultUnit: Unit.G,
+        gramsPerTablespoon: null,
+      },
+    ]);
+
+    await expect(
+      service.create('user-1', {
+        title: 'Gâteau',
+        ingredients: [
+          {
+            ingredientId: 'ingredient-3',
+            quantity: 1,
+            unit: Unit.CL,
+          },
+        ],
+      }),
+    ).rejects.toThrow("renseigne d'abord son équivalence");
+  });
+
+  it('refuse deux lignes du même ingrédient dans une recette (400)', async () => {
+    prisma.ingredient.findMany.mockResolvedValue([
+      {
+        id: 'ingredient-3',
+        name: 'Farine',
+        defaultUnit: Unit.G,
+        gramsPerTablespoon: 10,
+      },
+    ]);
+
+    await expect(
+      service.create('user-1', {
+        title: 'Gâteau',
+        ingredients: [
+          { ingredientId: 'ingredient-3', quantity: 600, unit: Unit.G },
+          {
+            ingredientId: 'ingredient-3',
+            quantity: 3,
+            unit: Unit.CUILLERE_A_SOUPE,
+          },
+        ],
+      }),
+    ).rejects.toThrow('apparaît plusieurs fois dans la recette');
+    expect(prisma.recipe.create).not.toHaveBeenCalled();
   });
 });

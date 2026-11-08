@@ -241,6 +241,82 @@ describe('CalendarService', () => {
     expect(emailService.sendInsufficientStockEmail).not.toHaveBeenCalled();
   });
 
+  // L'unité du stock est la référence : le besoin de la recette y est converti.
+  it('consumes the recipe quantity converted into the stock unit', async () => {
+    prisma.calendarEntry.findUnique.mockResolvedValue(ownedEntry);
+    prisma.calendarEntry.update.mockImplementation(
+      (args: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          ...ownedEntry,
+          ...args.data,
+          recipe: { title: 'Recette' },
+          actualRecipe: null,
+        }),
+    );
+    prisma.recipeIngredient.findMany.mockResolvedValue([
+      {
+        ingredientId: 'ingredient-1',
+        quantity: 200,
+        unit: Unit.G,
+        ingredient: { name: 'Farine' },
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      userId: 'user-1',
+      ingredientId: 'ingredient-1',
+      quantity: 1,
+      unit: Unit.KG,
+    });
+
+    await service.validate('user-1', 'entry-1', { done: true });
+
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 0.8 },
+    });
+    const [args] = prisma.calendarEntryConsumption.upsert.mock.calls[0] as [
+      { create: { quantity: number; unit: Unit } },
+    ];
+    expect(args.create).toMatchObject({ quantity: 0.2, unit: Unit.KG });
+    expect(emailService.sendInsufficientStockEmail).not.toHaveBeenCalled();
+  });
+
+  it('leaves the stock untouched when the units have no equivalent', async () => {
+    prisma.calendarEntry.findUnique.mockResolvedValue(ownedEntry);
+    prisma.calendarEntry.update.mockImplementation(
+      (args: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          ...ownedEntry,
+          ...args.data,
+          recipe: { title: 'Recette' },
+          actualRecipe: null,
+        }),
+    );
+    prisma.recipeIngredient.findMany.mockResolvedValue([
+      {
+        ingredientId: 'ingredient-1',
+        quantity: 200,
+        unit: Unit.PIECE,
+        ingredient: { name: 'Farine' },
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      userId: 'user-1',
+      ingredientId: 'ingredient-1',
+      quantity: 500,
+      unit: Unit.G,
+    });
+
+    await service.validate('user-1', 'entry-1', { done: true });
+
+    expect(prisma.stock.update).not.toHaveBeenCalled();
+    expect(prisma.stock.delete).not.toHaveBeenCalled();
+    expect(prisma.calendarEntryConsumption.upsert).not.toHaveBeenCalled();
+    expect(emailService.sendInsufficientStockEmail).not.toHaveBeenCalled();
+  });
+
   // Les portions choisies pour ce repas peuvent différer des portions de
   // base de la recette : les quantités consommées doivent suivre le ratio.
   it('scales the consumed quantities by the chosen servings', async () => {
@@ -372,6 +448,41 @@ describe('CalendarService', () => {
     );
     expect(prisma.calendarEntryConsumption.deleteMany).toHaveBeenCalledWith({
       where: { calendarEntryId: 'entry-1' },
+    });
+  });
+  it('consumes spoons of the recipe from a stock in grams through the ingredient equivalence', async () => {
+    prisma.calendarEntry.findUnique.mockResolvedValue(ownedEntry);
+    prisma.calendarEntry.update.mockImplementation(
+      (args: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          ...ownedEntry,
+          ...args.data,
+          recipe: { title: 'Recette' },
+          actualRecipe: null,
+        }),
+    );
+    prisma.recipeIngredient.findMany.mockResolvedValue([
+      {
+        ingredientId: 'ingredient-1',
+        quantity: 1,
+        unit: Unit.CUILLERE_A_SOUPE,
+        ingredient: { name: 'Farine', gramsPerTablespoon: 10 },
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      userId: 'user-1',
+      ingredientId: 'ingredient-1',
+      quantity: 500,
+      unit: Unit.G,
+    });
+
+    await service.validate('user-1', 'entry-1', { done: true });
+
+    // servings du repas 2 pour 2 portions de base : 1 c. à soupe = 10 g
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 490 },
     });
   });
 });

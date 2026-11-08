@@ -7,6 +7,7 @@ const UNIT_LABEL: Record<Unit, string> = {
   G: 'g',
   KG: 'kg',
   ML: 'ml',
+  CL: 'cl',
   L: 'L',
   PIECE: 'pièce(s)',
   CUILLERE_A_SOUPE: 'cuillère(s) à soupe',

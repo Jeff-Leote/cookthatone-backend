@@ -5,8 +5,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma, Unit } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
+import {
+  convertQuantity,
+  isMassVolumePair,
+  roundQuantity,
+  unitLabel,
+} from '../../common/units';
 import { GenerateShoppingListDto } from '../dtos/generate-shopping-list.dto';
 import { UpdateShoppingItemDto } from '../dtos/update-shopping-item.dto';
 
@@ -110,22 +117,13 @@ export class ShoppingService {
       );
     }
 
-    const neededByIngredient = new Map<string, number>();
-    for (const entry of entries) {
-      // Les quantités de la recette sont définies pour son nombre de
-      // portions de base ; on les met à l'échelle du nombre de portions
-      // choisi pour ce repas précis.
-      const ratio = entry.servings / entry.recipe.servings;
-      for (const recipeIngredient of entry.recipe.recipeIngredients) {
-        neededByIngredient.set(
-          recipeIngredient.ingredientId,
-          (neededByIngredient.get(recipeIngredient.ingredientId) ?? 0) +
-            recipeIngredient.quantity * ratio,
-        );
-      }
-    }
-
-    const ingredientIds = [...neededByIngredient.keys()];
+    const ingredientIds = [
+      ...new Set(
+        entries.flatMap((entry) =>
+          entry.recipe.recipeIngredients.map((line) => line.ingredientId),
+        ),
+      ),
+    ];
 
     const [stockEntries, ingredients] = await Promise.all([
       this.prisma.stock.findMany({
@@ -135,17 +133,84 @@ export class ShoppingService {
         where: { id: { in: ingredientIds } },
       }),
     ]);
-    const stockByIngredient = new Map(
-      stockEntries.map((stock) => [stock.ingredientId, stock.quantity]),
-    );
     const unitByIngredient = new Map(
       ingredients.map((ingredient) => [ingredient.id, ingredient.defaultUnit]),
     );
+    const nameByIngredient = new Map(
+      ingredients.map((ingredient) => [ingredient.id, ingredient.name]),
+    );
+    const equivalenceByIngredient = new Map(
+      ingredients.map((ingredient) => [
+        ingredient.id,
+        ingredient.gramsPerTablespoon,
+      ]),
+    );
+    const hint = (a: Unit, b: Unit) =>
+      isMassVolumePair(a, b)
+        ? " (renseigne l'équivalence de l'ingrédient dans le catalogue)"
+        : '';
+
+    // L'unité de l'ingrédient est la référence : besoins et stock y sont
+    // convertis avant d'être comparés. Deux unités sans équivalent (grammes
+    // et cuillères) ne sont jamais additionnées : on le signale.
+    const conflicts: string[] = [];
+
+    const neededByIngredient = new Map<string, number>();
+    for (const entry of entries) {
+      // Les quantités de la recette sont définies pour son nombre de
+      // portions de base ; on les met à l'échelle du nombre de portions
+      // choisi pour ce repas précis.
+      const ratio = entry.servings / entry.recipe.servings;
+      for (const line of entry.recipe.recipeIngredients) {
+        const referenceUnit = unitByIngredient.get(line.ingredientId)!;
+        const converted = convertQuantity(
+          line.quantity * ratio,
+          line.unit,
+          referenceUnit,
+          equivalenceByIngredient.get(line.ingredientId),
+        );
+        if (converted === null) {
+          conflicts.push(
+            `« ${nameByIngredient.get(line.ingredientId)} » est en ${unitLabel(line.unit)} dans « ${entry.recipe.title} » alors que son unité est ${unitLabel(referenceUnit)}${hint(line.unit, referenceUnit)}`,
+          );
+          continue;
+        }
+        neededByIngredient.set(
+          line.ingredientId,
+          (neededByIngredient.get(line.ingredientId) ?? 0) + converted,
+        );
+      }
+    }
+
+    const stockByIngredient = new Map<string, number>();
+    for (const stock of stockEntries) {
+      const referenceUnit = unitByIngredient.get(stock.ingredientId)!;
+      const converted = convertQuantity(
+        stock.quantity,
+        stock.unit,
+        referenceUnit,
+        equivalenceByIngredient.get(stock.ingredientId),
+      );
+      if (converted === null) {
+        conflicts.push(
+          `le stock de « ${nameByIngredient.get(stock.ingredientId)} » est en ${unitLabel(stock.unit)} alors que son unité est ${unitLabel(referenceUnit)}${hint(stock.unit, referenceUnit)}`,
+        );
+        continue;
+      }
+      stockByIngredient.set(stock.ingredientId, converted);
+    }
+
+    if (conflicts.length > 0) {
+      const shown = [...new Set(conflicts)].slice(0, 3).join(' ; ');
+      throw new BadRequestException(
+        `Unités incompatibles : ${shown}. Corrige-les avant de générer la liste.`,
+      );
+    }
 
     const items = [...neededByIngredient.entries()]
       .map(([ingredientId, quantityNeeded]) => ({
         ingredientId,
-        quantityNeeded,
+        quantityNeeded: roundQuantity(quantityNeeded),
         quantityInStock: stockByIngredient.get(ingredientId) ?? 0,
         unit: unitByIngredient.get(ingredientId)!,
       }))
@@ -233,24 +298,21 @@ export class ShoppingService {
       const items = await tx.shoppingItem.findMany({
         where: { listId: id, checked: true },
       });
+      const equivalences = await this.equivalencesOf(tx, items);
 
       for (const item of items) {
         const purchasedQuantity = Math.max(
           0,
           item.quantityNeeded - item.quantityInStock,
         );
-        await tx.stock.upsert({
-          where: {
-            userId_ingredientId: { userId, ingredientId: item.ingredientId },
-          },
-          create: {
-            userId,
-            ingredientId: item.ingredientId,
-            quantity: purchasedQuantity,
-            unit: item.unit,
-          },
-          update: { quantity: { increment: purchasedQuantity } },
-        });
+        await this.addToStock(
+          tx,
+          userId,
+          item.ingredientId,
+          purchasedQuantity,
+          item.unit,
+          equivalences.get(item.ingredientId),
+        );
         // On enregistre la quantité exacte ajoutée au stock, pour pouvoir
         // l'annuler précisément si la liste est dévalidée plus tard (le
         // stock peut avoir changé depuis, ex: consommation via le calendrier).
@@ -280,6 +342,7 @@ export class ShoppingService {
       const items = await tx.shoppingItem.findMany({
         where: { listId: id, purchasedQuantity: { gt: 0 } },
       });
+      const equivalences = await this.equivalencesOf(tx, items);
 
       for (const item of items) {
         const stock = await tx.stock.findUnique({
@@ -288,11 +351,22 @@ export class ShoppingService {
           },
         });
         if (stock) {
-          const remaining = stock.quantity - item.purchasedQuantity;
+          const current = convertQuantity(
+            stock.quantity,
+            stock.unit,
+            item.unit,
+            equivalences.get(item.ingredientId),
+          );
+          if (current === null) {
+            throw new ConflictException(
+              `Le stock de cet ingrédient est en ${unitLabel(stock.unit)}, incompatible avec ${unitLabel(item.unit)} : corrige-le avant de dévalider la liste`,
+            );
+          }
+          const remaining = roundQuantity(current - item.purchasedQuantity);
           if (remaining > 0) {
             await tx.stock.update({
               where: { id: stock.id },
-              data: { quantity: remaining },
+              data: { quantity: remaining, unit: item.unit },
             });
           } else {
             await tx.stock.delete({ where: { id: stock.id } });
@@ -311,6 +385,60 @@ export class ShoppingService {
   async remove(userId: string, id: string) {
     await this.ensureOwnedList(userId, id);
     await this.prisma.shoppingList.delete({ where: { id } });
+  }
+
+  // Équivalence poids/volume des ingrédients d'une liste (une seule requête).
+  private async equivalencesOf(
+    tx: Prisma.TransactionClient,
+    items: { ingredientId: string }[],
+  ) {
+    const ingredients = await tx.ingredient.findMany({
+      where: { id: { in: [...new Set(items.map((i) => i.ingredientId))] } },
+    });
+    return new Map(
+      ingredients.map((ingredient) => [
+        ingredient.id,
+        ingredient.gramsPerTablespoon,
+      ]),
+    );
+  }
+
+  // Même unité que la ligne de stock : incrément atomique (deux validations
+  // simultanées ne s'écrasent pas). Unité différente (donnée ancienne) : la
+  // ligne est convertie puis normalisée dans l'unité de l'ingrédient.
+  private async addToStock(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    ingredientId: string,
+    quantity: number,
+    unit: Unit,
+    gramsPerTablespoon?: number | null,
+  ) {
+    const where = { userId_ingredientId: { userId, ingredientId } };
+    const existing = await tx.stock.findUnique({ where });
+    if (!existing || existing.unit === unit) {
+      await tx.stock.upsert({
+        where,
+        create: { userId, ingredientId, quantity, unit },
+        update: { quantity: { increment: quantity } },
+      });
+      return;
+    }
+    const current = convertQuantity(
+      existing.quantity,
+      existing.unit,
+      unit,
+      gramsPerTablespoon,
+    );
+    if (current === null) {
+      throw new ConflictException(
+        `Le stock de cet ingrédient est en ${unitLabel(existing.unit)}, incompatible avec ${unitLabel(unit)} : corrige-le avant de valider la liste`,
+      );
+    }
+    await tx.stock.update({
+      where: { id: existing.id },
+      data: { quantity: roundQuantity(current + quantity), unit },
+    });
   }
 
   private async ensureOwnedList(userId: string, id: string) {
