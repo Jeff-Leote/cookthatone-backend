@@ -1,12 +1,17 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, Unit } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
+import {
+  areUnitsCompatible,
+  incompatibleUnitMessage,
+} from '../../common/units';
 import { RedisService } from '../../redis/services/redis.service';
 import { CreateRecipeDto } from '../dtos/create-recipe.dto';
 import { UpdateRecipeDto } from '../dtos/update-recipe.dto';
@@ -74,6 +79,7 @@ export class RecipesService {
   }
 
   async create(userId: string, dto: CreateRecipeDto) {
+    await this.assertIngredientUnits(userId, dto.ingredients ?? []);
     const recipe = await this.prisma.recipe.create({
       data: {
         userId,
@@ -131,6 +137,7 @@ export class RecipesService {
     dto: RecipeIngredientDto,
   ) {
     await this.ensureOwnedRecipe(userId, recipeId);
+    await this.assertIngredientUnits(userId, [dto]);
 
     try {
       return await this.prisma.recipeIngredient.create({
@@ -197,6 +204,53 @@ export class RecipesService {
       where: { recipeId },
       orderBy: { stepOrder: 'asc' },
     });
+  }
+
+  // Chaque ingrédient appartient à l'utilisateur et la ligne de recette est
+  // dans une unité compatible avec l'unité (définitive) de l'ingrédient :
+  // sinon les quantités de la recette et du stock ne seraient pas comparables.
+  private async assertIngredientUnits(
+    userId: string,
+    lines: { ingredientId: string; unit: Unit }[],
+  ) {
+    if (lines.length === 0) return;
+    const ids = [...new Set(lines.map((line) => line.ingredientId))];
+    const ingredients = await this.prisma.ingredient.findMany({
+      where: { id: { in: ids }, userId },
+    });
+    const byId = new Map(
+      ingredients.map((ingredient) => [ingredient.id, ingredient]),
+    );
+    const seen = new Set<string>();
+    for (const line of lines) {
+      const ingredient = byId.get(line.ingredientId);
+      if (!ingredient) {
+        throw new NotFoundException('Ingrédient introuvable');
+      }
+      // Une ligne par ingrédient (contrainte unique en base) : sans ce contrôle,
+      // un doublon finirait en erreur 500.
+      if (seen.has(line.ingredientId)) {
+        throw new BadRequestException(
+          `« ${ingredient.name} » apparaît plusieurs fois dans la recette : regroupe les quantités sur une seule ligne`,
+        );
+      }
+      seen.add(line.ingredientId);
+      if (
+        !areUnitsCompatible(
+          line.unit,
+          ingredient.defaultUnit,
+          ingredient.gramsPerTablespoon,
+        )
+      ) {
+        throw new BadRequestException(
+          incompatibleUnitMessage(
+            line.unit,
+            ingredient.name,
+            ingredient.defaultUnit,
+          ),
+        );
+      }
+    }
   }
 
   private async ensureOwnedRecipe(userId: string, id: string) {

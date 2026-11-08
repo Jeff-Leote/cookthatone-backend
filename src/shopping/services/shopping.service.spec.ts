@@ -67,7 +67,7 @@ describe('ShoppingService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
-      ingredient: { findMany: jest.fn() },
+      ingredient: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
     // Interactive transaction mock: runs the callback with the same mocked
@@ -99,12 +99,14 @@ describe('ShoppingService', () => {
         servings: 2,
         recipe: {
           servings: 2,
-          recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
+          recipeIngredients: [
+            { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+          ],
         },
       },
     ]);
     prisma.stock.findMany.mockResolvedValue([
-      { ingredientId: 'ingredient-1', quantity: 100 },
+      { ingredientId: 'ingredient-1', quantity: 100, unit: Unit.G },
     ]);
     prisma.ingredient.findMany.mockResolvedValue([
       { id: 'ingredient-1', defaultUnit: Unit.G },
@@ -137,12 +139,14 @@ describe('ShoppingService', () => {
         servings: 2,
         recipe: {
           servings: 2,
-          recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
+          recipeIngredients: [
+            { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+          ],
         },
       },
     ]);
     prisma.stock.findMany.mockResolvedValue([
-      { ingredientId: 'ingredient-1', quantity: 1000 },
+      { ingredientId: 'ingredient-1', quantity: 1000, unit: Unit.G },
     ]);
     prisma.ingredient.findMany.mockResolvedValue([
       { id: 'ingredient-1', defaultUnit: Unit.G },
@@ -169,7 +173,9 @@ describe('ShoppingService', () => {
         servings: 4, // recette prévue pour 2, mais 4 portions demandées
         recipe: {
           servings: 2,
-          recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
+          recipeIngredients: [
+            { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+          ],
         },
       },
     ]);
@@ -245,7 +251,9 @@ describe('ShoppingService', () => {
         servings: 2,
         recipe: {
           servings: 2,
-          recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
+          recipeIngredients: [
+            { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+          ],
         },
       },
     ]);
@@ -322,6 +330,272 @@ describe('ShoppingService', () => {
     expect(prisma.shoppingList.create).not.toHaveBeenCalled();
   });
 
+  // Unités : l'unité de l'ingrédient est la référence, besoins et stock y sont
+  // convertis avant d'être comparés.
+  describe('generate() avec des unités différentes', () => {
+    const period = {
+      periodStart: new Date('2026-07-06'),
+      periodEnd: new Date('2026-07-06'),
+    };
+
+    function mockWeek(
+      stock: { quantity: number; unit: Unit }[],
+      ingredientUnit: Unit = Unit.G,
+    ) {
+      prisma.stock.findMany.mockResolvedValue(
+        stock.map((entry) => ({ ingredientId: 'ingredient-1', ...entry })),
+      );
+      prisma.ingredient.findMany.mockResolvedValue([
+        { id: 'ingredient-1', name: 'Farine', defaultUnit: ingredientUnit },
+      ]);
+      prisma.shoppingList.create.mockImplementation(
+        (args: { data: { items?: { create: unknown[] } } }) =>
+          Promise.resolve({
+            ...ownedList,
+            items: args.data.items?.create ?? [],
+          }),
+      );
+    }
+
+    it('compares a stock in kg with a need in g', async () => {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: [
+              { ingredientId: 'ingredient-1', quantity: 1500, unit: Unit.G },
+            ],
+          },
+        },
+      ]);
+      mockWeek([{ quantity: 1, unit: Unit.KG }]);
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 1500,
+          quantityInStock: 1000,
+          unit: Unit.G,
+        },
+      ]);
+    });
+
+    it('lists nothing when a stock in kg covers a need in g', async () => {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: [
+              { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+            ],
+          },
+        },
+      ]);
+      mockWeek([{ quantity: 1, unit: Unit.KG }]);
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([]);
+    });
+
+    it('expresses the need in the ingredient unit when the recipe uses another one', async () => {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: [
+              {
+                ingredientId: 'ingredient-1',
+                quantity: 2,
+                unit: Unit.CUILLERE_A_SOUPE,
+              },
+            ],
+          },
+        },
+      ]);
+      mockWeek([], Unit.ML);
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 30,
+          quantityInStock: 0,
+          unit: Unit.ML,
+        },
+      ]);
+    });
+
+    it('adds the same ingredient used in two units across the period', async () => {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: [
+              { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+              { ingredientId: 'ingredient-1', quantity: 0.5, unit: Unit.KG },
+            ],
+          },
+        },
+      ]);
+      mockWeek([]);
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 1000,
+          quantityInStock: 0,
+          unit: Unit.G,
+        },
+      ]);
+    });
+
+    it('refuses to add quantities whose units have no equivalent and names the recipe', async () => {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Crêpes',
+            recipeIngredients: [
+              { ingredientId: 'ingredient-1', quantity: 2, unit: Unit.PIECE },
+            ],
+          },
+        },
+      ]);
+      mockWeek([]);
+
+      await expect(service.generate('user-1', period)).rejects.toThrow(
+        '« Farine » est en pièce dans « Crêpes » alors que son unité est g',
+      );
+      expect(prisma.shoppingList.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a stock whose unit has no equivalent in the ingredient unit', async () => {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: [
+              { ingredientId: 'ingredient-1', quantity: 500, unit: Unit.G },
+            ],
+          },
+        },
+      ]);
+      mockWeek([{ quantity: 3, unit: Unit.CL }]);
+
+      await expect(service.generate('user-1', period)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.shoppingList.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // Une ligne de stock dans une autre unité compatible (donnée ancienne) est
+  // convertie puis normalisée dans l'unité de l'ingrédient.
+  it('normalizes an existing stock in another unit when validating a list', async () => {
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
+    prisma.shoppingItem.findMany.mockResolvedValue([
+      {
+        id: 'item-1',
+        listId: 'list-1',
+        ingredientId: 'ingredient-1',
+        quantityNeeded: 1500,
+        quantityInStock: 1000,
+        unit: Unit.G,
+        checked: true,
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      quantity: 1,
+      unit: Unit.KG,
+    });
+    prisma.stock.update.mockResolvedValue({});
+    prisma.shoppingItem.update.mockResolvedValue({});
+
+    await service.validate('user-1', 'list-1');
+
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 1500, unit: Unit.G },
+    });
+    expect(prisma.stock.upsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses to validate when the existing stock unit has no equivalent', async () => {
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
+    prisma.shoppingItem.findMany.mockResolvedValue([
+      {
+        id: 'item-1',
+        listId: 'list-1',
+        ingredientId: 'ingredient-1',
+        quantityNeeded: 500,
+        quantityInStock: 0,
+        unit: Unit.G,
+        checked: true,
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      quantity: 3,
+      unit: Unit.PIECE,
+    });
+
+    await expect(service.validate('user-1', 'list-1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(prisma.stock.update).not.toHaveBeenCalled();
+  });
+
+  it('removes the purchased quantity from a stock stored in another compatible unit', async () => {
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
+    prisma.shoppingItem.findMany.mockResolvedValue([
+      {
+        id: 'item-1',
+        listId: 'list-1',
+        ingredientId: 'ingredient-1',
+        purchasedQuantity: 500,
+        unit: Unit.G,
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      quantity: 1.5,
+      unit: Unit.KG,
+    });
+    prisma.stock.update.mockResolvedValue({});
+    prisma.shoppingItem.update.mockResolvedValue({});
+
+    await service.unvalidate('user-1', 'list-1');
+
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 1000, unit: Unit.G },
+    });
+  });
+
   // T17: validate() items coches -> $transaction + stock mis a jour
   it('validates checked items through a transaction and updates the stock', async () => {
     prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
@@ -382,6 +656,7 @@ describe('ShoppingService', () => {
         listId: 'list-1',
         ingredientId: 'ingredient-1',
         purchasedQuantity: 400,
+        unit: Unit.G,
       },
     ]);
     prisma.stock.findUnique.mockResolvedValue({
@@ -389,6 +664,7 @@ describe('ShoppingService', () => {
       userId: 'user-1',
       ingredientId: 'ingredient-1',
       quantity: 400,
+      unit: Unit.G,
     });
     prisma.stock.update.mockResolvedValue({});
     prisma.shoppingItem.update.mockResolvedValue({});
@@ -417,6 +693,7 @@ describe('ShoppingService', () => {
         listId: 'list-1',
         ingredientId: 'ingredient-1',
         purchasedQuantity: 400,
+        unit: Unit.G,
       },
     ]);
     prisma.stock.findUnique.mockResolvedValue({
@@ -424,6 +701,7 @@ describe('ShoppingService', () => {
       userId: 'user-1',
       ingredientId: 'ingredient-1',
       quantity: 700,
+      unit: Unit.G,
     });
     prisma.stock.update.mockResolvedValue({});
     prisma.shoppingItem.update.mockResolvedValue({});
@@ -432,7 +710,7 @@ describe('ShoppingService', () => {
 
     expect(prisma.stock.update).toHaveBeenCalledWith({
       where: { id: 'stock-1' },
-      data: { quantity: 300 },
+      data: { quantity: 300, unit: Unit.G },
     });
     expect(prisma.stock.delete).not.toHaveBeenCalled();
   });
@@ -445,5 +723,140 @@ describe('ShoppingService', () => {
     );
     expect(prisma.shoppingItem.findMany).not.toHaveBeenCalled();
     expect(prisma.stock.update).not.toHaveBeenCalled();
+  });
+  // Équivalence de l'ingrédient : les cuillères se comptent en grammes.
+  describe('generate() avec une équivalence poids/volume', () => {
+    const period = {
+      periodStart: new Date('2026-07-06'),
+      periodEnd: new Date('2026-07-06'),
+    };
+
+    function mockWeek(
+      lines: { quantity: number; unit: Unit }[],
+      stock: { quantity: number; unit: Unit }[],
+      gramsPerTablespoon: number | null,
+    ) {
+      prisma.calendarEntry.findMany.mockResolvedValue([
+        {
+          plannedDate: new Date('2026-07-06'),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: lines.map((line) => ({
+              ingredientId: 'ingredient-1',
+              ...line,
+            })),
+          },
+        },
+      ]);
+      prisma.stock.findMany.mockResolvedValue(
+        stock.map((entry) => ({ ingredientId: 'ingredient-1', ...entry })),
+      );
+      prisma.ingredient.findMany.mockResolvedValue([
+        {
+          id: 'ingredient-1',
+          name: 'Farine',
+          defaultUnit: Unit.G,
+          gramsPerTablespoon,
+        },
+      ]);
+      prisma.shoppingList.create.mockImplementation(
+        (args: { data: { items?: { create: unknown[] } } }) =>
+          Promise.resolve({
+            ...ownedList,
+            items: args.data.items?.create ?? [],
+          }),
+      );
+    }
+
+    it('lists nothing when 500 g in stock cover one spoon of the recipe', async () => {
+      mockWeek(
+        [{ quantity: 1, unit: Unit.CUILLERE_A_SOUPE }],
+        [{ quantity: 500, unit: Unit.G }],
+        10,
+      );
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([]);
+    });
+
+    it('adds spoons to the grams of the recipe and compares with the stock', async () => {
+      mockWeek(
+        [
+          { quantity: 600, unit: Unit.G },
+          { quantity: 3, unit: Unit.CUILLERE_A_SOUPE },
+        ],
+        [{ quantity: 500, unit: Unit.G }],
+        10,
+      );
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 630,
+          quantityInStock: 500,
+          unit: Unit.G,
+        },
+      ]);
+    });
+
+    it('counts spoons with the universal fallback (15 g) when the ingredient has no equivalence', async () => {
+      mockWeek([{ quantity: 2, unit: Unit.CUILLERE_A_SOUPE }], [], null);
+
+      const result = await service.generate('user-1', period);
+
+      expect(result.items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 30,
+          quantityInStock: 0,
+          unit: Unit.G,
+        },
+      ]);
+    });
+
+    it('tells how to link weight and volume when the ingredient has no equivalence', async () => {
+      mockWeek([{ quantity: 1, unit: Unit.CL }], [], null);
+
+      await expect(service.generate('user-1', period)).rejects.toThrow(
+        "renseigne l'équivalence de l'ingrédient dans le catalogue",
+      );
+    });
+  });
+
+  it('uses the ingredient equivalence to normalize a stock stored in ml when validating', async () => {
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
+    prisma.shoppingItem.findMany.mockResolvedValue([
+      {
+        id: 'item-1',
+        listId: 'list-1',
+        ingredientId: 'ingredient-1',
+        quantityNeeded: 500,
+        quantityInStock: 0,
+        unit: Unit.G,
+        checked: true,
+      },
+    ]);
+    prisma.ingredient.findMany.mockResolvedValue([
+      { id: 'ingredient-1', gramsPerTablespoon: 10 },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      quantity: 15,
+      unit: Unit.ML,
+    });
+    prisma.stock.update.mockResolvedValue({});
+    prisma.shoppingItem.update.mockResolvedValue({});
+
+    await service.validate('user-1', 'list-1');
+
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 510, unit: Unit.G },
+    });
   });
 });

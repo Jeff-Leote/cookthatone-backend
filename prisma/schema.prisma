@@ -24,6 +24,7 @@ enum Unit {
   G
   KG
   ML
+  CL
   L
   PIECE
   CUILLERE_A_SOUPE
@@ -89,6 +90,9 @@ model Ingredient {
   userId      String @map("user_id")
   name        String
   defaultUnit Unit   @map("default_unit")
+  // Poids d'une cuillère à soupe (15 ml) en grammes : permet de passer du poids
+  // au volume pour cet ingrédient (farine ≈ 10 g). Absent = conversion refusée.
+  gramsPerTablespoon Float? @map("grams_per_tablespoon")
 
   // Relations
   user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)

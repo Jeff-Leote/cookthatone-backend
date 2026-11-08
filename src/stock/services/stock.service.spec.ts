@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -18,6 +19,7 @@ describe('StockService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
+    ingredient: { findFirst: jest.Mock };
   };
 
   const ownedStock = {
@@ -29,6 +31,14 @@ describe('StockService', () => {
     expiresAt: null,
   };
 
+  // L'unité de l'ingrédient est définitive : le stock y est toujours
+  // enregistré.
+  const flour = {
+    id: 'ingredient-1',
+    name: 'Farine',
+    defaultUnit: Unit.G,
+  };
+
   beforeEach(async () => {
     prisma = {
       stock: {
@@ -37,6 +47,9 @@ describe('StockService', () => {
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+      },
+      ingredient: {
+        findFirst: jest.fn().mockResolvedValue(flour),
       },
     };
 
@@ -87,6 +100,59 @@ describe('StockService', () => {
     });
 
     expect(result).toEqual(ownedStock);
+    const [args] = prisma.stock.create.mock.calls[0] as [
+      { data: { quantity: number; unit: Unit } },
+    ];
+    expect(args.data).toMatchObject({ quantity: 500, unit: Unit.G });
+  });
+
+  it('converts a compatible unit into the ingredient unit', async () => {
+    prisma.stock.create.mockResolvedValue(ownedStock);
+
+    await service.create('user-1', {
+      ingredientId: 'ingredient-1',
+      quantity: 1.5,
+      unit: Unit.KG,
+    });
+
+    const [args] = prisma.stock.create.mock.calls[0] as [
+      { data: { quantity: number; unit: Unit } },
+    ];
+    expect(args.data).toMatchObject({ quantity: 1500, unit: Unit.G });
+  });
+
+  it('rejects a unit without equivalent in the ingredient unit', async () => {
+    await expect(
+      service.create('user-1', {
+        ingredientId: 'ingredient-1',
+        quantity: 2,
+        unit: Unit.ML,
+      }),
+    ).rejects.toThrow("L'unité ml n'est pas compatible avec « Farine » (g)");
+    expect(prisma.stock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ingredient that does not belong to the user', async () => {
+    prisma.ingredient.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.create('user-1', {
+        ingredientId: 'ingredient-2',
+        quantity: 1,
+        unit: Unit.G,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.stock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a quantity that rounds down to zero', async () => {
+    await expect(
+      service.create('user-1', {
+        ingredientId: 'ingredient-1',
+        quantity: 0.0000001,
+        unit: Unit.KG,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('throws ConflictException when the ingredient is already in stock', async () => {
@@ -144,5 +210,49 @@ describe('StockService', () => {
     expect(prisma.stock.delete).toHaveBeenCalledWith({
       where: { id: 'stock-1' },
     });
+  });
+  it('converts spoons into grams with the ingredient equivalence', async () => {
+    prisma.ingredient.findFirst.mockResolvedValue({
+      id: 'ingredient-1',
+      name: 'Farine',
+      defaultUnit: Unit.G,
+      gramsPerTablespoon: 10,
+    });
+    prisma.stock.create.mockResolvedValue(ownedStock);
+
+    await service.create('user-1', {
+      ingredientId: 'ingredient-1',
+      quantity: 2,
+      unit: Unit.CUILLERE_A_SOUPE,
+    });
+
+    const [args] = prisma.stock.create.mock.calls[0] as [
+      { data: { quantity: number; unit: Unit } },
+    ];
+    expect(args.data).toMatchObject({ quantity: 20, unit: Unit.G });
+  });
+
+  it('asks for the equivalence when the unit needs one', async () => {
+    await expect(
+      service.create('user-1', {
+        ingredientId: 'ingredient-1',
+        quantity: 2,
+        unit: Unit.CL,
+      }),
+    ).rejects.toThrow("renseigne d'abord son équivalence");
+  });
+  it('converts spoons into grams with the universal fallback (15 g) when the ingredient has no equivalence', async () => {
+    prisma.stock.create.mockResolvedValue(ownedStock);
+
+    await service.create('user-1', {
+      ingredientId: 'ingredient-1',
+      quantity: 2,
+      unit: Unit.CUILLERE_A_SOUPE,
+    });
+
+    const [args] = prisma.stock.create.mock.calls[0] as [
+      { data: { quantity: number; unit: Unit } },
+    ];
+    expect(args.data).toMatchObject({ quantity: 30, unit: Unit.G });
   });
 });
