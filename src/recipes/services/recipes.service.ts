@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
+import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
 import { RedisService } from '../../redis/services/redis.service';
 import { CreateRecipeDto } from '../dtos/create-recipe.dto';
 import { UpdateRecipeDto } from '../dtos/update-recipe.dto';
@@ -17,6 +18,10 @@ const UNIQUE_CONSTRAINT_VIOLATION = 'P2002';
 const RECORD_NOT_FOUND = 'P2025';
 const RECIPE_LIST_CACHE_TTL_SECONDS = 30;
 
+function cachePrefix(userId: string): string {
+  return `recipes:${userId}:`;
+}
+
 @Injectable()
 export class RecipesService {
   constructor(
@@ -27,7 +32,7 @@ export class RecipesService {
   async findAll(userId: string, query: FindRecipesQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
-    const cacheKey = `recipes:${userId}:${query.search ?? ''}:${page}:${limit}`;
+    const cacheKey = `${cachePrefix(userId)}${query.search ?? ''}:${page}:${limit}`;
 
     const cached =
       await this.redis.getJson<Prisma.RecipeGetPayload<object>[]>(cacheKey);
@@ -60,16 +65,16 @@ export class RecipesService {
       },
     });
     if (!recipe) {
-      throw new NotFoundException('Recipe not found');
+      throw new NotFoundException('Recette introuvable');
     }
     if (recipe.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(ACCESS_DENIED_MESSAGE);
     }
     return recipe;
   }
 
-  create(userId: string, dto: CreateRecipeDto) {
-    return this.prisma.recipe.create({
+  async create(userId: string, dto: CreateRecipeDto) {
+    const recipe = await this.prisma.recipe.create({
       data: {
         userId,
         title: dto.title,
@@ -100,16 +105,24 @@ export class RecipesService {
         steps: { orderBy: { stepOrder: 'asc' } },
       },
     });
+    await this.redis.deleteByPrefix(cachePrefix(userId));
+    return recipe;
   }
 
   async update(userId: string, id: string, dto: UpdateRecipeDto) {
     await this.ensureOwnedRecipe(userId, id);
-    return this.prisma.recipe.update({ where: { id }, data: dto });
+    const recipe = await this.prisma.recipe.update({
+      where: { id },
+      data: dto,
+    });
+    await this.redis.deleteByPrefix(cachePrefix(userId));
+    return recipe;
   }
 
   async remove(userId: string, id: string) {
     await this.ensureOwnedRecipe(userId, id);
     await this.prisma.recipe.delete({ where: { id } });
+    await this.redis.deleteByPrefix(cachePrefix(userId));
   }
 
   async addIngredient(
@@ -134,7 +147,7 @@ export class RecipesService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('Ingredient already added to this recipe');
+        throw new ConflictException('Cet ingrédient est déjà dans la recette');
       }
       throw error;
     }
@@ -156,7 +169,7 @@ export class RecipesService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === RECORD_NOT_FOUND
       ) {
-        throw new NotFoundException('Ingredient not found on this recipe');
+        throw new NotFoundException("Cet ingrédient n'est pas dans la recette");
       }
       throw error;
     }
@@ -189,10 +202,10 @@ export class RecipesService {
   private async ensureOwnedRecipe(userId: string, id: string) {
     const recipe = await this.prisma.recipe.findUnique({ where: { id } });
     if (!recipe) {
-      throw new NotFoundException('Recipe not found');
+      throw new NotFoundException('Recette introuvable');
     }
     if (recipe.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(ACCESS_DENIED_MESSAGE);
     }
     return recipe;
   }

@@ -21,4 +21,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async setJson(key: string, value: unknown, ttlSeconds: number) {
     await this.client.set(key, JSON.stringify(value), 'EX', ttlSeconds);
   }
+
+  async deleteByPrefix(prefix: string) {
+    const keysStream = this.client.scanStream({
+      match: `${prefix}*`,
+      count: 100,
+    });
+    for await (const keys of keysStream as AsyncIterable<string[]>) {
+      if (keys.length > 0) {
+        await this.client.del(...keys);
+      }
+    }
+  }
 }

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
+import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
 import { CreateStockDto } from '../dtos/create-stock.dto';
 import { UpdateStockDto } from '../dtos/update-stock.dto';
 import { FindStockQueryDto } from '../dtos/find-stock-query.dto';
@@ -55,7 +56,7 @@ export class StockService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('This ingredient is already in stock');
+        throw new ConflictException('Cet ingrédient est déjà en stock');
       }
       throw error;
     }
@@ -78,10 +79,10 @@ export class StockService {
   private async ensureOwnedStock(userId: string, id: string) {
     const stock = await this.prisma.stock.findUnique({ where: { id } });
     if (!stock) {
-      throw new NotFoundException('Stock entry not found');
+      throw new NotFoundException('Article de stock introuvable');
     }
     if (stock.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(ACCESS_DENIED_MESSAGE);
     }
     return stock;
   }

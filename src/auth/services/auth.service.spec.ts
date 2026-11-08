@@ -91,7 +91,7 @@ describe('AuthService', () => {
     );
   });
 
-  // T02: register() avec un email deja existant -> ConflictException (409)
+  // T02: register() avec un email déjà existant -> ConflictException (409)
   it('throws ConflictException when the email is already registered', async () => {
     prisma.user.findFirst.mockResolvedValue(existingUser);
 
@@ -105,7 +105,7 @@ describe('AuthService', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 
-  // register() avec un pseudo deja existant -> ConflictException (409)
+  // register() avec un pseudo déjà existant -> ConflictException (409)
   it('throws ConflictException when the pseudo is already registered', async () => {
     prisma.user.findFirst.mockResolvedValue(existingUser);
 

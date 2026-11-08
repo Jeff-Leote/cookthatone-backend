@@ -95,8 +95,8 @@ export class EmailService {
         throw new Error(`Brevo a renvoyé ${res.status} : ${body}`);
       }
     } catch (error) {
-      // Un echec d'envoi ne doit jamais faire echouer l'operation metier
-      // qui a declenche l'email (inscription, validation d'un repas...).
+      // Un échec d'envoi ne doit jamais faire échouer l'opération métier
+      // qui a déclenché l'email (inscription, validation d'un repas...).
       this.logger.error(`Échec de l'envoi de ${description} à ${to}`, error);
     }
   }
