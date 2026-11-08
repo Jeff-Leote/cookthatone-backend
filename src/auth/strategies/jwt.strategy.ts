@@ -22,7 +22,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Un token à usage spécifique (ex. vérification d'email) ne doit jamais
     // pouvoir servir de jeton d'authentification classique.
     if (payload.purpose) {
-      throw new UnauthorizedException();
+      throw new UnauthorizedException(
+        'Session invalide, merci de te reconnecter',
+      );
     }
     return { userId: payload.sub };
   }

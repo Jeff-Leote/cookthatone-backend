@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
+import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
 import { EmailService, StockDeficit } from '../../email/services/email.service';
 import { CreateCalendarEntryDto } from '../dtos/create-calendar-entry.dto';
 import { MoveCalendarEntryDto } from '../dtos/move-calendar-entry.dto';
@@ -73,7 +74,7 @@ export class CalendarService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('This slot is already taken');
+        throw new ConflictException('Ce créneau est déjà occupé');
       }
       throw error;
     }
@@ -93,7 +94,7 @@ export class CalendarService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === UNIQUE_CONSTRAINT_VIOLATION
       ) {
-        throw new ConflictException('This slot is already taken');
+        throw new ConflictException('Ce créneau est déjà occupé');
       }
       throw error;
     }
@@ -107,9 +108,9 @@ export class CalendarService {
       : null;
 
     const { updated, deficits } = await this.prisma.$transaction(async (tx) => {
-      // On annule d'abord la consommation precedente (si le repas etait
-      // deja valide) pour repartir sur une base propre, que ce soit pour
-      // devalider ou pour re-valider avec une recette differente.
+      // On annule d'abord la consommation précédente (si le repas était
+      // déjà validé) pour repartir sur une base propre, que ce soit pour
+      // dévalider ou pour re-valider avec une recette différente.
       await this.restoreConsumption(tx, userId, id);
 
       const deficits = willBeDone
@@ -152,10 +153,10 @@ export class CalendarService {
     return updated;
   }
 
-  // Remet au stock exactement ce qui avait ete consomme pour ce repas, puis
-  // efface l'historique de consommation : le stock peut avoir change depuis
+  // Remet au stock exactement ce qui avait été consommé pour ce repas, puis
+  // efface l'historique de consommation : le stock peut avoir changé depuis
   // (autre repas cuisine dans l'intervalle), donc on ne recalcule rien, on
-  // annule precisement le mouvement precedent.
+  // annule précisément le mouvement précédent.
   private async restoreConsumption(
     tx: Prisma.TransactionClient,
     userId: string,
@@ -188,7 +189,7 @@ export class CalendarService {
     });
   }
 
-  // Consomme le stock disponible pour chaque ingredient de la recette, sans
+  // Consomme le stock disponible pour chaque ingrédient de la recette, sans
   // jamais le faire passer sous zero. Le manque eventuel est retourne pour
   // notifier l'utilisateur (email), la validation n'est jamais bloquee.
   private async consumeForRecipe(
@@ -202,8 +203,8 @@ export class CalendarService {
       where: { id: recipeId },
       select: { servings: true },
     });
-    // Les quantites de la recette sont definies pour son nombre de portions
-    // de base ; on les met a l'echelle du nombre de portions confirme pour
+    // Les quantités de la recette sont définies pour son nombre de portions
+    // de base ; on les met à l'échelle du nombre de portions confirmé pour
     // ce repas.
     const ratio = servings / (recipe?.servings ?? 1);
 
@@ -228,10 +229,15 @@ export class CalendarService {
       const missing = neededQuantity - consumed;
 
       if (consumed > 0 && stock) {
-        await tx.stock.update({
-          where: { id: stock.id },
-          data: { quantity: available - consumed },
-        });
+        const remaining = available - consumed;
+        if (remaining > 0) {
+          await tx.stock.update({
+            where: { id: stock.id },
+            data: { quantity: remaining },
+          });
+        } else {
+          await tx.stock.delete({ where: { id: stock.id } });
+        }
         await tx.calendarEntryConsumption.upsert({
           where: {
             calendarEntryId_ingredientId: {
@@ -271,10 +277,10 @@ export class CalendarService {
       where: { id },
     });
     if (!entry) {
-      throw new NotFoundException('Calendar entry not found');
+      throw new NotFoundException('Repas introuvable dans le calendrier');
     }
     if (entry.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(ACCESS_DENIED_MESSAGE);
     }
     return entry;
   }

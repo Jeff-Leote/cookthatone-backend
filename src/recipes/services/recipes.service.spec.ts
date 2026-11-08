@@ -15,7 +15,11 @@ describe('RecipesService', () => {
       delete: jest.Mock;
     };
   };
-  let redis: { getJson: jest.Mock; setJson: jest.Mock };
+  let redis: {
+    getJson: jest.Mock;
+    setJson: jest.Mock;
+    deleteByPrefix: jest.Mock;
+  };
 
   const ownedRecipe = { id: 'recipe-1', userId: 'user-1', title: 'Tarte' };
 
@@ -32,6 +36,7 @@ describe('RecipesService', () => {
     redis = {
       getJson: jest.fn().mockResolvedValue(null),
       setJson: jest.fn().mockResolvedValue(undefined),
+      deleteByPrefix: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -143,6 +148,7 @@ describe('RecipesService', () => {
       expect.objectContaining({ id: 'recipe-1', title: 'Tarte' }),
     );
     expect(prisma.recipe.create).toHaveBeenCalledTimes(1);
+    expect(redis.deleteByPrefix).toHaveBeenCalledWith('recipes:user-1:');
   });
 
   it('throws ForbiddenException on update() for a recipe owned by another user', async () => {
@@ -166,5 +172,29 @@ describe('RecipesService', () => {
     expect(prisma.recipe.delete).toHaveBeenCalledWith({
       where: { id: 'recipe-1' },
     });
+    expect(redis.deleteByPrefix).toHaveBeenCalledWith('recipes:user-1:');
+  });
+
+  // Une écriture doit vider les listes en cache de cet utilisateur pour qu'elles
+  // reflètent immédiatement la modification, sans attendre l'expiration du TTL.
+  it('clears the user cached lists when updating a recipe', async () => {
+    prisma.recipe.findUnique.mockResolvedValue(ownedRecipe);
+    prisma.recipe.update.mockResolvedValue({ ...ownedRecipe, title: 'Autre' });
+
+    await service.update('user-1', 'recipe-1', { title: 'Autre' });
+
+    expect(redis.deleteByPrefix).toHaveBeenCalledWith('recipes:user-1:');
+  });
+
+  it('does not clear the cache when the recipe belongs to someone else', async () => {
+    prisma.recipe.findUnique.mockResolvedValue({
+      ...ownedRecipe,
+      userId: 'someone-else',
+    });
+
+    await expect(service.remove('user-1', 'recipe-1')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(redis.deleteByPrefix).not.toHaveBeenCalled();
   });
 });

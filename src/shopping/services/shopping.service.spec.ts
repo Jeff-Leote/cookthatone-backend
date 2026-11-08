@@ -28,6 +28,7 @@ describe('ShoppingService', () => {
       findUnique: jest.Mock;
       upsert: jest.Mock;
       update: jest.Mock;
+      delete: jest.Mock;
     };
     ingredient: { findMany: jest.Mock };
     $transaction: jest.Mock;
@@ -64,6 +65,7 @@ describe('ShoppingService', () => {
         findUnique: jest.fn(),
         upsert: jest.fn(),
         update: jest.fn(),
+        delete: jest.fn(),
       },
       ingredient: { findMany: jest.fn() },
       $transaction: jest.fn(),
@@ -158,13 +160,13 @@ describe('ShoppingService', () => {
     expect(result.items).toEqual([]);
   });
 
-  // Les portions choisies pour un repas peuvent differer des portions de
-  // base de la recette : les quantites necessaires doivent suivre le ratio.
+  // Les portions choisies pour un repas peuvent différer des portions de
+  // base de la recette : les quantités nécessaires doivent suivre le ratio.
   it('scales ingredient quantities by the servings chosen for each meal', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
         plannedDate: new Date('2026-07-06'),
-        servings: 4, // recette prevue pour 2, mais 4 portions demandees
+        servings: 4, // recette prévue pour 2, mais 4 portions demandées
         recipe: {
           servings: 2,
           recipeIngredients: [{ ingredientId: 'ingredient-1', quantity: 500 }],
@@ -206,7 +208,7 @@ describe('ShoppingService', () => {
     expect(prisma.calendarEntry.findMany).not.toHaveBeenCalled();
   });
 
-  // Demande explicite : verifier que chaque jour de la plage a une recette
+  // Demande explicite : vérifier que chaque jour de la plage a une recette
   // programmee, sinon erreur nommant le jour manquant.
   it('throws BadRequestException naming the day with no planned recipe', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
@@ -215,7 +217,7 @@ describe('ShoppingService', () => {
         servings: 2,
         recipe: { servings: 2, recipeIngredients: [] },
       },
-      // 9 aout absent : aucune entree pour ce jour
+      // 9 août absent : aucune entrée pour ce jour
       {
         plannedDate: new Date('2026-08-10'),
         servings: 2,
@@ -294,7 +296,7 @@ describe('ShoppingService', () => {
   });
 
   // Demande explicite : deux listes ne doivent jamais pouvoir couvrir un
-  // meme jour (double comptage du stock si les deux sont validees).
+  // même jour (double comptage du stock si les deux sont validées).
   it('throws ConflictException when the period overlaps an existing list', async () => {
     prisma.calendarEntry.findMany.mockResolvedValue([
       {
@@ -393,10 +395,10 @@ describe('ShoppingService', () => {
 
     await service.unvalidate('user-1', 'list-1');
 
-    expect(prisma.stock.update).toHaveBeenCalledWith({
+    expect(prisma.stock.delete).toHaveBeenCalledWith({
       where: { id: 'stock-1' },
-      data: { quantity: 0 },
     });
+    expect(prisma.stock.update).not.toHaveBeenCalled();
     expect(prisma.shoppingItem.update).toHaveBeenCalledWith({
       where: { id: 'item-1' },
       data: { purchasedQuantity: 0 },
@@ -405,6 +407,34 @@ describe('ShoppingService', () => {
       where: { id: 'list-1', validated: true },
       data: { validated: false },
     });
+  });
+
+  it('keeps the remaining stock when unvalidating only removes part of it', async () => {
+    prisma.shoppingList.updateMany.mockResolvedValue({ count: 1 });
+    prisma.shoppingItem.findMany.mockResolvedValue([
+      {
+        id: 'item-1',
+        listId: 'list-1',
+        ingredientId: 'ingredient-1',
+        purchasedQuantity: 400,
+      },
+    ]);
+    prisma.stock.findUnique.mockResolvedValue({
+      id: 'stock-1',
+      userId: 'user-1',
+      ingredientId: 'ingredient-1',
+      quantity: 700,
+    });
+    prisma.stock.update.mockResolvedValue({});
+    prisma.shoppingItem.update.mockResolvedValue({});
+
+    await service.unvalidate('user-1', 'list-1');
+
+    expect(prisma.stock.update).toHaveBeenCalledWith({
+      where: { id: 'stock-1' },
+      data: { quantity: 300 },
+    });
+    expect(prisma.stock.delete).not.toHaveBeenCalled();
   });
 
   it('throws ConflictException when the atomic claim finds the list not validated', async () => {

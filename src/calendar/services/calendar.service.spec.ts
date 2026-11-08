@@ -23,7 +23,12 @@ describe('CalendarService', () => {
     };
     recipe: { findUnique: jest.Mock };
     recipeIngredient: { findMany: jest.Mock };
-    stock: { findUnique: jest.Mock; update: jest.Mock; upsert: jest.Mock };
+    stock: {
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      upsert: jest.Mock;
+      delete: jest.Mock;
+    };
     user: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -59,6 +64,7 @@ describe('CalendarService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue({}),
         upsert: jest.fn().mockResolvedValue({}),
+        delete: jest.fn().mockResolvedValue({}),
       },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
@@ -87,7 +93,7 @@ describe('CalendarService', () => {
     expect(service).toBeDefined();
   });
 
-  // T11: create() creneau libre -> entree creee
+  // T11: create() créneau libre -> entrée créée
   it('creates an entry when the slot is free', async () => {
     prisma.calendarEntry.create.mockResolvedValue(ownedEntry);
 
@@ -101,7 +107,7 @@ describe('CalendarService', () => {
     expect(result).toEqual(ownedEntry);
   });
 
-  // T12: create() creneau deja occupe -> ConflictException (409)
+  // T12: create() créneau déjà occupe -> ConflictException (409)
   it('throws ConflictException when the slot is already taken', async () => {
     prisma.calendarEntry.create.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -120,7 +126,7 @@ describe('CalendarService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  // T13: validate() done=true, meme recette -> actualRecipeId = recipeId
+  // T13: validate() done=true, même recette -> actualRecipeId = recipeId
   it('sets actualRecipeId to the planned recipe when validating without a replacement', async () => {
     prisma.calendarEntry.findUnique.mockResolvedValue(ownedEntry);
     prisma.calendarEntry.update.mockImplementation(
@@ -183,7 +189,7 @@ describe('CalendarService', () => {
     expect(result.validatedAt).toBeNull();
   });
 
-  // validate() consomme le stock disponible pour la recette validee
+  // validate() consomme le stock disponible pour la recette validée
   it('consumes stock for the recipe ingredients when validating', async () => {
     prisma.calendarEntry.findUnique.mockResolvedValue(ownedEntry);
     prisma.calendarEntry.update.mockImplementation(
@@ -235,12 +241,12 @@ describe('CalendarService', () => {
     expect(emailService.sendInsufficientStockEmail).not.toHaveBeenCalled();
   });
 
-  // Les portions choisies pour ce repas peuvent differer des portions de
-  // base de la recette : les quantites consommees doivent suivre le ratio.
+  // Les portions choisies pour ce repas peuvent différer des portions de
+  // base de la recette : les quantités consommées doivent suivre le ratio.
   it('scales the consumed quantities by the chosen servings', async () => {
     prisma.calendarEntry.findUnique.mockResolvedValue({
       ...ownedEntry,
-      servings: 4, // recette prevue pour 2, mais 4 portions demandees ici
+      servings: 4, // recette prévue pour 2, mais 4 portions demandées ici
     });
     prisma.calendarEntry.update.mockImplementation(
       (args: { data: Record<string, unknown> }) =>
@@ -278,7 +284,8 @@ describe('CalendarService', () => {
   });
 
   // Quand le stock ne couvre pas toute la recette, on consomme ce qui est
-  // disponible (sans passer sous zero) et on notifie par email le manque.
+  // disponible (sans passer sous zéro, la ligne épuisée est supprimée) et on
+  // notifie par email le manque.
   it('sends an insufficient stock email when stock does not cover the recipe', async () => {
     prisma.calendarEntry.findUnique.mockResolvedValue(ownedEntry);
     prisma.calendarEntry.update.mockImplementation(
@@ -312,10 +319,10 @@ describe('CalendarService', () => {
 
     await service.validate('user-1', 'entry-1', { done: true });
 
-    expect(prisma.stock.update).toHaveBeenCalledWith({
+    expect(prisma.stock.delete).toHaveBeenCalledWith({
       where: { id: 'stock-1' },
-      data: { quantity: 0 },
     });
+    expect(prisma.stock.update).not.toHaveBeenCalled();
     expect(emailService.sendInsufficientStockEmail).toHaveBeenCalledWith(
       'user@example.com',
       'Chef',
@@ -324,8 +331,8 @@ describe('CalendarService', () => {
     );
   });
 
-  // Devalider un repas doit remettre au stock exactement ce qui avait ete
-  // consomme, meme si le stock a change depuis.
+  // Dévalider un repas doit remettre au stock exactement ce qui avait été
+  // consommé, même si le stock a changé depuis.
   it('restores exactly the consumed quantity when unvalidating a meal', async () => {
     prisma.calendarEntry.findUnique.mockResolvedValue({
       ...ownedEntry,

@@ -6,14 +6,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/services/prisma.service';
+import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
 import { GenerateShoppingListDto } from '../dtos/generate-shopping-list.dto';
 import { UpdateShoppingItemDto } from '../dtos/update-shopping-item.dto';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // Le nom de la contrainte d'exclusion GiST posee en migration (voir
-// prisma/migrations/*_shopping_list_date_range) : filet de securite si deux
-// requetes concurrentes passent toutes les deux le pre-check applicatif.
+// prisma/migrations/*_shopping_list_date_range) : filet de sécurité si deux
+// requêtes concurrentes passent toutes les deux le pre-check applicatif.
 const NO_OVERLAP_CONSTRAINT = 'shopping_lists_no_overlap';
 
 function formatDateFr(date: Date): string {
@@ -45,10 +46,10 @@ export class ShoppingService {
       include: { items: { include: { ingredient: true } } },
     });
     if (!list) {
-      throw new NotFoundException('Shopping list not found');
+      throw new NotFoundException('Liste de courses introuvable');
     }
     if (list.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(ACCESS_DENIED_MESSAGE);
     }
     return list;
   }
@@ -66,8 +67,8 @@ export class ShoppingService {
       include: { recipe: { include: { recipeIngredients: true } } },
     });
 
-    // Chaque jour de la plage doit avoir au moins un repas programme : une
-    // liste de courses n'a pas de sens pour un jour sans recette planifiee.
+    // Chaque jour de la plage doit avoir au moins un repas programmé : une
+    // liste de courses n'a pas de sens pour un jour sans recette planifiée.
     const plannedDays = new Set(
       entries.map((entry) => toIsoDate(entry.plannedDate)),
     );
@@ -83,9 +84,9 @@ export class ShoppingService {
       }
     }
 
-    // Reutilise la liste existante si la plage est exactement identique
-    // (regeneration), sinon verifie qu'aucune autre liste du meme
-    // utilisateur ne couvre deja un jour de cette plage.
+    // Réutilise la liste existante si la plage est exactement identique
+    // (régénération), sinon vérifie qu'aucune autre liste du même
+    // utilisateur ne couvre déjà un jour de cette plage.
     const existing = await this.prisma.shoppingList.findFirst({
       where: { userId, periodStart, periodEnd },
     });
@@ -111,9 +112,9 @@ export class ShoppingService {
 
     const neededByIngredient = new Map<string, number>();
     for (const entry of entries) {
-      // Les quantites de la recette sont definies pour son nombre de
-      // portions de base ; on les met a l'echelle du nombre de portions
-      // choisi pour ce repas precis.
+      // Les quantités de la recette sont définies pour son nombre de
+      // portions de base ; on les met à l'échelle du nombre de portions
+      // choisi pour ce repas précis.
       const ratio = entry.servings / entry.recipe.servings;
       for (const recipeIngredient of entry.recipe.recipeIngredients) {
         neededByIngredient.set(
@@ -151,8 +152,8 @@ export class ShoppingService {
       .filter((item) => item.quantityInStock < item.quantityNeeded);
 
     if (existing) {
-      // Une liste (non validee) existe deja pour exactement cette plage : on
-      // la remplace plutot que d'en creer une seconde.
+      // Une liste (non validée) existe déjà pour exactement cette plage : on
+      // la remplace plutôt que d'en creer une seconde.
       return this.prisma.$transaction(async (tx) => {
         await tx.shoppingItem.deleteMany({ where: { listId: existing.id } });
         return tx.shoppingList.update({
@@ -174,9 +175,9 @@ export class ShoppingService {
         include: { items: { include: { ingredient: true } } },
       });
     } catch (error) {
-      // Filet de securite : deux requetes concurrentes ont pu passer toutes
+      // Filet de sécurité : deux requêtes concurrentes ont pu passer toutes
       // les deux le pre-check de chevauchement ci-dessus avant qu'aucune
-      // n'ait ecrit ; la contrainte d'exclusion GiST bloque la seconde au
+      // n'ait écrit ; la contrainte d'exclusion GiST bloque la seconde au
       // niveau base, on la traduit juste en message clair.
       if (
         error instanceof Error &&
@@ -202,7 +203,9 @@ export class ShoppingService {
       where: { id: itemId },
     });
     if (!item || item.listId !== listId) {
-      throw new NotFoundException('Shopping item not found');
+      throw new NotFoundException(
+        'Article introuvable dans la liste de courses',
+      );
     }
 
     return this.prisma.shoppingItem.update({
@@ -224,7 +227,7 @@ export class ShoppingService {
         data: { validated: true },
       });
       if (claimed.count === 0) {
-        throw new ConflictException('Shopping list already validated');
+        throw new ConflictException('Cette liste de courses est déjà validée');
       }
 
       const items = await tx.shoppingItem.findMany({
@@ -248,9 +251,9 @@ export class ShoppingService {
           },
           update: { quantity: { increment: purchasedQuantity } },
         });
-        // On enregistre la quantite exacte ajoutee au stock, pour pouvoir
-        // l'annuler precisement si la liste est devalidee plus tard (le
-        // stock peut avoir change depuis, ex: consommation via le calendrier).
+        // On enregistre la quantité exacte ajoutée au stock, pour pouvoir
+        // l'annuler précisément si la liste est dévalidée plus tard (le
+        // stock peut avoir changé depuis, ex: consommation via le calendrier).
         await tx.shoppingItem.update({
           where: { id: item.id },
           data: { purchasedQuantity },
@@ -265,13 +268,13 @@ export class ShoppingService {
     await this.ensureOwnedList(userId, id);
 
     await this.prisma.$transaction(async (tx) => {
-      // Meme principe de claim atomique que validate(), en sens inverse.
+      // Même principe de claim atomique que validate(), en sens inverse.
       const claimed = await tx.shoppingList.updateMany({
         where: { id, validated: true },
         data: { validated: false },
       });
       if (claimed.count === 0) {
-        throw new ConflictException('Shopping list is not validated');
+        throw new ConflictException("Cette liste de courses n'est pas validée");
       }
 
       const items = await tx.shoppingItem.findMany({
@@ -285,12 +288,15 @@ export class ShoppingService {
           },
         });
         if (stock) {
-          await tx.stock.update({
-            where: { id: stock.id },
-            data: {
-              quantity: Math.max(0, stock.quantity - item.purchasedQuantity),
-            },
-          });
+          const remaining = stock.quantity - item.purchasedQuantity;
+          if (remaining > 0) {
+            await tx.stock.update({
+              where: { id: stock.id },
+              data: { quantity: remaining },
+            });
+          } else {
+            await tx.stock.delete({ where: { id: stock.id } });
+          }
         }
         await tx.shoppingItem.update({
           where: { id: item.id },
@@ -310,10 +316,10 @@ export class ShoppingService {
   private async ensureOwnedList(userId: string, id: string) {
     const list = await this.prisma.shoppingList.findUnique({ where: { id } });
     if (!list) {
-      throw new NotFoundException('Shopping list not found');
+      throw new NotFoundException('Liste de courses introuvable');
     }
     if (list.userId !== userId) {
-      throw new ForbiddenException();
+      throw new ForbiddenException(ACCESS_DENIED_MESSAGE);
     }
     return list;
   }

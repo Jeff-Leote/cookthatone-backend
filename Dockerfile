@@ -34,6 +34,11 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/dist ./dist
 
+USER node
+
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -qO- "http://localhost:${PORT:-3000}/health" || exit 1
 
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]

@@ -149,9 +149,9 @@ model CalendarEntry {
   recipeId       String    @map("recipe_id")
   plannedDate    DateTime  @map("planned_date") @db.Date
   mealSlot       MealSlot  @map("meal_slot")
-  // Nombre de portions confirme au moment de la planification (par defaut
-  // celui de la recette, mais ajustable par repas). Sert a mettre a
-  // l'echelle les quantites d'ingredients pour ce repas precis.
+  // Nombre de portions confirmé au moment de la planification (par défaut
+  // celui de la recette, mais ajustable par repas). Sert à mettre à
+  // l'echelle les quantités d'ingrédients pour ce repas précis.
   servings       Int       @default(1)
   done           Boolean   @default(false)
   actualRecipeId String?   @map("actual_recipe_id") // null si repas non validé
@@ -171,9 +171,9 @@ model CalendarEntry {
 
 // ============================================================
 // CALENDAR_ENTRY_CONSUMPTION
-// Quantite reellement retiree du stock quand un repas est valide.
-// Necessaire pour pouvoir remettre exactement cette quantite au stock
-// si le repas est devalide (le stock peut avoir change entre-temps).
+// Quantité réellement retirée du stock quand un repas est validé.
+// Nécessaire pour pouvoir remettre exactement cette quantité au stock
+// si le repas est dévalidé (le stock peut avoir changé entre-temps).
 // ============================================================
 
 model CalendarEntryConsumption {
@@ -229,11 +229,11 @@ model ShoppingList {
   user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   items ShoppingItem[]
 
-  // Empeche deux listes du meme utilisateur de couvrir un jour en commun
-  // (validerait deux fois le meme besoin et doublerait le stock). Contrainte
-  // d'exclusion GiST plutot qu'un simple @@unique : la plage est libre, pas
-  // alignee sur une semaine fixe. Ajoutee a la main dans la migration SQL,
-  // Prisma ne modelise pas les contraintes EXCLUDE.
+  // Empêche deux listes du même utilisateur de couvrir un jour en commun
+  // (validerait deux fois le même besoin et doublerait le stock). Contrainte
+  // d'exclusion GiST plutôt qu'un simple @@unique : la plage est libre, pas
+  // alignée sur une semaine fixe. Ajoutée à la main dans la migration SQL,
+  // Prisma ne modélise pas les contraintes EXCLUDE.
   @@map("shopping_lists")
 }
 
@@ -252,9 +252,9 @@ model ShoppingItem {
   quantityInStock    Float   @default(0) @map("quantity_in_stock")
   unit               Unit
   checked            Boolean @default(false)
-  // Quantite reellement ajoutee au stock lors de la validation de la liste.
-  // Permet de "devalider" la liste en retirant exactement ce qui a ete ajoute,
-  // meme si le stock a change depuis (ex: consommation via le calendrier).
+  // Quantité réellement ajoutée au stock lors de la validation de la liste.
+  // Permet de "dévalider" la liste en retirant exactement ce qui a été ajouté,
+  // même si le stock a changé depuis (ex: consommation via le calendrier).
   purchasedQuantity  Float   @default(0) @map("purchased_quantity")
 
   // Relations

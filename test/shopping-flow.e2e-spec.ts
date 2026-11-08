@@ -358,8 +358,8 @@ describe('Parcours liste de courses (e2e)', () => {
       const stockByName = new Map(
         body<StockEntry[]>(stock).map((s) => [s.ingredient.name, s.quantity]),
       );
-      expect(stockByName.get('Farine e2e')).toBe(0);
-      expect(stockByName.get('Sucre e2e')).toBe(0);
+      expect(stockByName.has('Farine e2e')).toBe(false);
+      expect(stockByName.has('Sucre e2e')).toBe(false);
     });
   });
 
