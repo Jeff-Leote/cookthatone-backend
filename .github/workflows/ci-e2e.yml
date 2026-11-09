@@ -34,9 +34,18 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
       DATABASE_URL: postgresql://cookthatone:cookthatone@localhost:5432/cookthatone?schema=public
-      # Redis est mocké dans les tests e2e ; une URL factice suffit
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: test-secret-ci
 
