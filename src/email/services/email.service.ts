@@ -44,6 +44,20 @@ export class EmailService {
     );
   }
 
+  async sendPasswordResetEmail(to: string, pseudo: string, resetUrl: string) {
+    await this.send(
+      to,
+      'Réinitialise ton mot de passe — CookthatOne',
+      `
+        <p>Bonjour ${pseudo},</p>
+        <p>Tu as demandé à réinitialiser ton mot de passe sur CookthatOne. Clique sur le lien ci-dessous pour choisir un nouveau mot de passe :</p>
+        <p><a href="${resetUrl}">${resetUrl}</a></p>
+        <p>Ce lien expire dans 1 heure. Si tu n'es pas à l'origine de cette demande, ignore cet email.</p>
+      `,
+      "l'email de réinitialisation du mot de passe",
+    );
+  }
+
   async sendInsufficientStockEmail(
     to: string,
     pseudo: string,
@@ -98,7 +112,10 @@ export class EmailService {
     } catch (error) {
       // Un échec d'envoi ne doit jamais faire échouer l'opération métier
       // qui a déclenché l'email (inscription, validation d'un repas...).
-      this.logger.error(`Échec de l'envoi de ${description} à ${to}`, error);
+      this.logger.error(
+        `Échec de l'envoi de ${description}`,
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 }
