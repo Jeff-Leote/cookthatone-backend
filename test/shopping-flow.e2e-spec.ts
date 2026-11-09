@@ -28,6 +28,7 @@ interface RecipeResponse {
 }
 interface ShoppingListResponse {
   id: string;
+  periodStart: string;
   items: EntityId[];
 }
 interface StockEntry {
@@ -302,7 +303,7 @@ describe('Parcours liste de courses (e2e)', () => {
         .set('Authorization', `Bearer ${token1}`)
         .send({ periodStart: isoDate(day1), periodEnd: isoDate(day2) })
         .expect(201);
-      const list = body<ShoppingListResponse>(res);
+      const list = body<ShoppingListResponse[]>(res)[0];
       shoppingListId = list.id;
       // 2 jours x recette (farine 500g, sucre 200g) = 1000g farine, 400g sucre
       expect(list.items).toHaveLength(2);
@@ -553,9 +554,8 @@ describe('Parcours liste de courses (e2e)', () => {
         .set('Authorization', `Bearer ${token1}`)
         .send({ periodStart: isoDate(day3), periodEnd: isoDate(day3) })
         .expect(201);
-      const items = body<{ items: ShoppingItemWithIngredient[] }>(
-        listRes,
-      ).items;
+      const items =
+        body<{ items: ShoppingItemWithIngredient[] }[]>(listRes)[0].items;
       const byName = new Map(items.map((i) => [i.ingredient.name, i]));
 
       const riz = byName.get('Riz e2e');
@@ -718,6 +718,56 @@ describe('Parcours liste de courses (e2e)', () => {
         .expect(403);
     });
 
+    it('découpe une période à cheval sur deux semaines en une liste par semaine, et régénérer les remplace', async () => {
+      // Prochain dimanche à au moins 60 jours : dimanche et lundi sont dans
+      // deux semaines différentes (lundi au dimanche).
+      const sunday = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+      sunday.setUTCDate(sunday.getUTCDate() + ((7 - sunday.getUTCDay()) % 7));
+      const monday = new Date(sunday.getTime() + 24 * 60 * 60 * 1000);
+
+      const recipeRes = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Deux semaines e2e',
+          servings: 2,
+          ingredients: [{ ingredientId: farineId, quantity: 100, unit: 'G' }],
+        })
+        .expect(201);
+      for (const day of [sunday, monday]) {
+        await request(server)
+          .post('/calendar')
+          .set('Authorization', `Bearer ${token1}`)
+          .send({
+            recipeId: body<EntityId>(recipeRes).id,
+            plannedDate: isoDate(day),
+            mealSlot: 'MIDI',
+            servings: 2,
+          })
+          .expect(201);
+      }
+
+      const generate = () =>
+        request(server)
+          .post('/shopping/generate')
+          .set('Authorization', `Bearer ${token1}`)
+          .send({ periodStart: isoDate(sunday), periodEnd: isoDate(monday) })
+          .expect(201);
+
+      const first = body<ShoppingListResponse[]>(await generate());
+      expect(first).toHaveLength(2);
+      expect(first.map((list) => list.periodStart.slice(0, 10))).toEqual([
+        isoDate(sunday),
+        isoDate(monday),
+      ]);
+
+      // Régénérer remplace les deux listes au lieu d'en créer d'autres.
+      const second = body<ShoppingListResponse[]>(await generate());
+      expect(second.map((list) => list.id)).toEqual(
+        first.map((list) => list.id),
+      );
+    });
+
     it('compare 63 cuillères à soupe (630 g) au stock de 500 g', async () => {
       const recipeRes = await request(server)
         .post('/recipes')
@@ -747,9 +797,8 @@ describe('Parcours liste de courses (e2e)', () => {
         .set('Authorization', `Bearer ${token1}`)
         .send({ periodStart: isoDate(day4), periodEnd: isoDate(day4) })
         .expect(201);
-      const items = body<{ items: ShoppingItemWithIngredient[] }>(
-        listRes,
-      ).items;
+      const items =
+        body<{ items: ShoppingItemWithIngredient[] }[]>(listRes)[0].items;
       const farine = items.find(
         (i) => i.ingredient.name === 'Farine cuillère e2e',
       );
