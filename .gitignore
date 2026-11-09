@@ -36,3 +36,6 @@ prisma/migrations/dev.db
 # projet perso — pas du code source
 .claude/
 CookthatOne-Backend-Guide.pdf
+
+# sauvegardes du script de rattrapage des unités
+/sauvegarde-unites-*.json
