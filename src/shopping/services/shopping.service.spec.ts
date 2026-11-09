@@ -121,7 +121,7 @@ describe('ShoppingService', () => {
       periodEnd: new Date('2026-07-06'),
     });
 
-    expect(result.items).toEqual([
+    expect(result[0].items).toEqual([
       {
         ingredientId: 'ingredient-1',
         quantityNeeded: 500,
@@ -161,7 +161,7 @@ describe('ShoppingService', () => {
       periodEnd: new Date('2026-07-06'),
     });
 
-    expect(result.items).toEqual([]);
+    expect(result[0].items).toEqual([]);
   });
 
   // Les portions choisies pour un repas peuvent différer des portions de
@@ -194,7 +194,7 @@ describe('ShoppingService', () => {
     });
 
     // ratio 4/2 = 2 -> 500 devient 1000
-    expect(result.items).toEqual([
+    expect(result[0].items).toEqual([
       {
         ingredientId: 'ingredient-1',
         quantityNeeded: 1000,
@@ -375,7 +375,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([
+      expect(result[0].items).toEqual([
         {
           ingredientId: 'ingredient-1',
           quantityNeeded: 1500,
@@ -403,7 +403,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([]);
+      expect(result[0].items).toEqual([]);
     });
 
     it('expresses the need in the ingredient unit when the recipe uses another one', async () => {
@@ -428,7 +428,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([
+      expect(result[0].items).toEqual([
         {
           ingredientId: 'ingredient-1',
           quantityNeeded: 30,
@@ -457,7 +457,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([
+      expect(result[0].items).toEqual([
         {
           ingredientId: 'ingredient-1',
           quantityNeeded: 1000,
@@ -779,7 +779,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([]);
+      expect(result[0].items).toEqual([]);
     });
 
     it('adds spoons to the grams of the recipe and compares with the stock', async () => {
@@ -794,7 +794,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([
+      expect(result[0].items).toEqual([
         {
           ingredientId: 'ingredient-1',
           quantityNeeded: 630,
@@ -809,7 +809,7 @@ describe('ShoppingService', () => {
 
       const result = await service.generate('user-1', period);
 
-      expect(result.items).toEqual([
+      expect(result[0].items).toEqual([
         {
           ingredientId: 'ingredient-1',
           quantityNeeded: 30,
@@ -857,6 +857,153 @@ describe('ShoppingService', () => {
     expect(prisma.stock.update).toHaveBeenCalledWith({
       where: { id: 'stock-1' },
       data: { quantity: 510, unit: Unit.G },
+    });
+  });
+  // Une période de plusieurs semaines donne une liste par semaine.
+  describe('generate() sur plusieurs semaines', () => {
+    const start = new Date('2026-07-06');
+    const end = new Date('2026-07-19');
+
+    function mockTwoWeeks(stockQuantity: number | null) {
+      prisma.calendarEntry.findMany.mockResolvedValue(
+        Array.from({ length: 14 }, (_, day) => ({
+          plannedDate: new Date(start.getTime() + day * 24 * 60 * 60 * 1000),
+          servings: 2,
+          recipe: {
+            servings: 2,
+            title: 'Gâteau',
+            recipeIngredients: [
+              { ingredientId: 'ingredient-1', quantity: 100, unit: Unit.G },
+            ],
+          },
+        })),
+      );
+      prisma.stock.findMany.mockResolvedValue(
+        stockQuantity === null
+          ? []
+          : [
+              {
+                ingredientId: 'ingredient-1',
+                quantity: stockQuantity,
+                unit: Unit.G,
+              },
+            ],
+      );
+      prisma.ingredient.findMany.mockResolvedValue([
+        { id: 'ingredient-1', name: 'Farine', defaultUnit: Unit.G },
+      ]);
+      prisma.shoppingList.create.mockImplementation(
+        (args: {
+          data: {
+            periodStart: Date;
+            periodEnd: Date;
+            items?: { create: unknown[] };
+          };
+        }) =>
+          Promise.resolve({
+            ...ownedList,
+            periodStart: args.data.periodStart,
+            periodEnd: args.data.periodEnd,
+            items: args.data.items?.create ?? [],
+          }),
+      );
+    }
+
+    it('creates one list per week for a period over two weeks', async () => {
+      mockTwoWeeks(null);
+
+      const result = await service.generate('user-1', {
+        periodStart: start,
+        periodEnd: end,
+      });
+
+      expect(result).toHaveLength(2);
+      expect(
+        result.map((list) => [
+          list.periodStart.toISOString().slice(0, 10),
+          list.periodEnd.toISOString().slice(0, 10),
+        ]),
+      ).toEqual([
+        ['2026-07-06', '2026-07-12'],
+        ['2026-07-13', '2026-07-19'],
+      ]);
+      expect(result[0].items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 700,
+          quantityInStock: 0,
+          unit: Unit.G,
+        },
+      ]);
+      expect(result[1].items).toHaveLength(1);
+    });
+
+    it('uses the stock for the first week before the next ones', async () => {
+      mockTwoWeeks(1000);
+
+      const result = await service.generate('user-1', {
+        periodStart: start,
+        periodEnd: end,
+      });
+
+      // semaine 1 : 700 g couverts par 1000 g ; il reste 300 g pour la semaine 2
+      expect(result[0].items).toEqual([]);
+      expect(result[1].items).toEqual([
+        {
+          ingredientId: 'ingredient-1',
+          quantityNeeded: 700,
+          quantityInStock: 300,
+          unit: Unit.G,
+        },
+      ]);
+    });
+
+    it('replaces a not validated list that covers the whole period', async () => {
+      mockTwoWeeks(null);
+      prisma.shoppingList.findFirst.mockImplementation(
+        (args: { where: { periodStart?: unknown; periodEnd?: unknown } }) => {
+          const { periodStart, periodEnd } = args.where;
+          const isWholePeriod =
+            periodStart instanceof Date &&
+            periodEnd instanceof Date &&
+            periodStart.getTime() === start.getTime() &&
+            periodEnd.getTime() === end.getTime();
+          return Promise.resolve(
+            isWholePeriod ? { ...ownedList, id: 'legacy-list' } : null,
+          );
+        },
+      );
+      prisma.shoppingItem.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.shoppingList.delete.mockResolvedValue({});
+
+      const result = await service.generate('user-1', {
+        periodStart: start,
+        periodEnd: end,
+      });
+
+      expect(prisma.shoppingList.delete).toHaveBeenCalledWith({
+        where: { id: 'legacy-list' },
+      });
+      expect(result).toHaveLength(2);
+    });
+
+    it('refuses to regenerate when a week is already validated and creates nothing', async () => {
+      mockTwoWeeks(null);
+      prisma.shoppingList.findFirst.mockImplementation(
+        (args: { where: { periodStart?: unknown } }) =>
+          Promise.resolve(
+            args.where.periodStart instanceof Date &&
+              args.where.periodStart.getTime() ===
+                new Date('2026-07-13').getTime()
+              ? { ...ownedList, id: 'list-w2', validated: true }
+              : null,
+          ),
+      );
+
+      await expect(
+        service.generate('user-1', { periodStart: start, periodEnd: end }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.shoppingList.create).not.toHaveBeenCalled();
     });
   });
 });

@@ -8,6 +8,7 @@ import {
 import { Prisma, Unit } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { ACCESS_DENIED_MESSAGE } from '../../common/messages';
+import { splitIntoWeeks, type Week } from '../week-split';
 import {
   convertQuantity,
   isMassVolumePair,
@@ -36,6 +37,10 @@ function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+type ShoppingListWithItems = Prisma.ShoppingListGetPayload<{
+  include: { items: { include: { ingredient: true } } };
+}>;
+
 @Injectable()
 export class ShoppingService {
   constructor(private readonly prisma: PrismaService) {}
@@ -61,6 +66,9 @@ export class ShoppingService {
     return list;
   }
 
+  // Une période de plusieurs semaines donne une liste par semaine (lundi au
+  // dimanche), créées d'un coup : tout est enregistré ou rien. Le stock sert
+  // d'abord aux premières semaines.
   async generate(userId: string, dto: GenerateShoppingListDto) {
     const { periodStart, periodEnd } = dto;
     if (periodEnd < periodStart) {
@@ -91,30 +99,53 @@ export class ShoppingService {
       }
     }
 
-    // Réutilise la liste existante si la plage est exactement identique
-    // (régénération), sinon vérifie qu'aucune autre liste du même
-    // utilisateur ne couvre déjà un jour de cette plage.
-    const existing = await this.prisma.shoppingList.findFirst({
-      where: { userId, periodStart, periodEnd },
-    });
-    if (existing?.validated) {
+    const weeks = splitIntoWeeks(periodStart, periodEnd);
+
+    // Une liste (non validée) couvrant exactement toute la période, créée avant
+    // la découpe par semaine, est remplacée par les listes hebdomadaires.
+    const legacy =
+      weeks.length > 1
+        ? await this.prisma.shoppingList.findFirst({
+            where: { userId, periodStart, periodEnd },
+          })
+        : null;
+    if (legacy?.validated) {
       throw new ConflictException(
         'Cette liste de courses est déjà validée, dévalidez-la avant de la régénérer',
       );
     }
 
-    const overlapping = await this.prisma.shoppingList.findFirst({
-      where: {
-        userId,
-        ...(existing ? { id: { not: existing.id } } : {}),
-        periodStart: { lte: periodEnd },
-        periodEnd: { gte: periodStart },
-      },
-    });
-    if (overlapping) {
-      throw new ConflictException(
-        `Cette période chevauche une liste de courses existante (${formatDateFr(overlapping.periodStart)} au ${formatDateFr(overlapping.periodEnd)})`,
+    // Réutilise la liste d'une semaine si sa plage est exactement identique
+    // (régénération), sinon vérifie qu'aucune autre liste du même utilisateur
+    // ne couvre déjà un jour de cette semaine.
+    const plans: { week: Week; existingId: string | null }[] = [];
+    for (const week of weeks) {
+      const existing = await this.prisma.shoppingList.findFirst({
+        where: { userId, periodStart: week.start, periodEnd: week.end },
+      });
+      if (existing?.validated) {
+        throw new ConflictException(
+          'Cette liste de courses est déjà validée, dévalidez-la avant de la régénérer',
+        );
+      }
+
+      const ignored = [existing?.id, legacy?.id].filter((id): id is string =>
+        Boolean(id),
       );
+      const overlapping = await this.prisma.shoppingList.findFirst({
+        where: {
+          userId,
+          ...(ignored.length > 0 ? { id: { notIn: ignored } } : {}),
+          periodStart: { lte: week.end },
+          periodEnd: { gte: week.start },
+        },
+      });
+      if (overlapping) {
+        throw new ConflictException(
+          `Cette période chevauche une liste de courses existante (${formatDateFr(overlapping.periodStart)} au ${formatDateFr(overlapping.periodEnd)})`,
+        );
+      }
+      plans.push({ week, existingId: existing?.id ?? null });
     }
 
     const ingredientIds = [
@@ -155,8 +186,13 @@ export class ShoppingService {
     // et cuillères) ne sont jamais additionnées : on le signale.
     const conflicts: string[] = [];
 
-    const neededByIngredient = new Map<string, number>();
+    const neededByWeek = weeks.map(() => new Map<string, number>());
     for (const entry of entries) {
+      const weekIndex = weeks.findIndex(
+        (week) =>
+          entry.plannedDate >= week.start && entry.plannedDate <= week.end,
+      );
+      const needed = neededByWeek[weekIndex];
       // Les quantités de la recette sont définies pour son nombre de
       // portions de base ; on les met à l'échelle du nombre de portions
       // choisi pour ce repas précis.
@@ -175,14 +211,14 @@ export class ShoppingService {
           );
           continue;
         }
-        neededByIngredient.set(
+        needed.set(
           line.ingredientId,
-          (neededByIngredient.get(line.ingredientId) ?? 0) + converted,
+          (needed.get(line.ingredientId) ?? 0) + converted,
         );
       }
     }
 
-    const stockByIngredient = new Map<string, number>();
+    const remainingStock = new Map<string, number>();
     for (const stock of stockEntries) {
       const referenceUnit = unitByIngredient.get(stock.ingredientId)!;
       const converted = convertQuantity(
@@ -197,7 +233,7 @@ export class ShoppingService {
         );
         continue;
       }
-      stockByIngredient.set(stock.ingredientId, converted);
+      remainingStock.set(stock.ingredientId, converted);
     }
 
     if (conflicts.length > 0) {
@@ -207,37 +243,72 @@ export class ShoppingService {
       );
     }
 
-    const items = [...neededByIngredient.entries()]
-      .map(([ingredientId, quantityNeeded]) => ({
-        ingredientId,
-        quantityNeeded: roundQuantity(quantityNeeded),
-        quantityInStock: stockByIngredient.get(ingredientId) ?? 0,
-        unit: unitByIngredient.get(ingredientId)!,
-      }))
-      .filter((item) => item.quantityInStock < item.quantityNeeded);
-
-    if (existing) {
-      // Une liste (non validée) existe déjà pour exactement cette plage : on
-      // la remplace plutôt que d'en creer une seconde.
-      return this.prisma.$transaction(async (tx) => {
-        await tx.shoppingItem.deleteMany({ where: { listId: existing.id } });
-        return tx.shoppingList.update({
-          where: { id: existing.id },
-          data: { items: items.length ? { create: items } : undefined },
-          include: { items: { include: { ingredient: true } } },
-        });
-      });
-    }
+    // Semaine après semaine : le stock disponible pour une semaine est ce que
+    // les semaines précédentes n'ont pas consommé.
+    const itemsByWeek = neededByWeek.map((needed) => {
+      const items: {
+        ingredientId: string;
+        quantityNeeded: number;
+        quantityInStock: number;
+        unit: Unit;
+      }[] = [];
+      for (const [ingredientId, quantity] of needed) {
+        const quantityNeeded = roundQuantity(quantity);
+        const quantityInStock = remainingStock.get(ingredientId) ?? 0;
+        remainingStock.set(
+          ingredientId,
+          roundQuantity(Math.max(0, quantityInStock - quantityNeeded)),
+        );
+        if (quantityInStock < quantityNeeded) {
+          items.push({
+            ingredientId,
+            quantityNeeded,
+            quantityInStock,
+            unit: unitByIngredient.get(ingredientId)!,
+          });
+        }
+      }
+      return items;
+    });
 
     try {
-      return await this.prisma.shoppingList.create({
-        data: {
-          userId,
-          periodStart,
-          periodEnd,
-          items: items.length ? { create: items } : undefined,
-        },
-        include: { items: { include: { ingredient: true } } },
+      return await this.prisma.$transaction(async (tx) => {
+        if (legacy) {
+          await tx.shoppingItem.deleteMany({ where: { listId: legacy.id } });
+          await tx.shoppingList.delete({ where: { id: legacy.id } });
+        }
+        const include = { items: { include: { ingredient: true } } };
+        const lists: ShoppingListWithItems[] = [];
+        for (const [index, plan] of plans.entries()) {
+          const items = itemsByWeek[index];
+          if (plan.existingId) {
+            // Une liste (non validée) existe déjà pour exactement cette
+            // semaine : on la remplace plutôt que d'en créer une seconde.
+            await tx.shoppingItem.deleteMany({
+              where: { listId: plan.existingId },
+            });
+            lists.push(
+              await tx.shoppingList.update({
+                where: { id: plan.existingId },
+                data: { items: items.length ? { create: items } : undefined },
+                include,
+              }),
+            );
+          } else {
+            lists.push(
+              await tx.shoppingList.create({
+                data: {
+                  userId,
+                  periodStart: plan.week.start,
+                  periodEnd: plan.week.end,
+                  items: items.length ? { create: items } : undefined,
+                },
+                include,
+              }),
+            );
+          }
+        }
+        return lists;
       });
     } catch (error) {
       // Filet de sécurité : deux requêtes concurrentes ont pu passer toutes
