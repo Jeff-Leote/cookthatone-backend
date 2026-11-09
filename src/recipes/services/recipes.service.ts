@@ -16,6 +16,7 @@ import { RedisService } from '../../redis/services/redis.service';
 import { CreateRecipeDto } from '../dtos/create-recipe.dto';
 import { UpdateRecipeDto } from '../dtos/update-recipe.dto';
 import { RecipeIngredientDto } from '../dtos/recipe-ingredient.dto';
+import { UpdateRecipeIngredientDto } from '../dtos/update-recipe-ingredient.dto';
 import { ReplaceRecipeStepsDto } from '../dtos/replace-recipe-steps.dto';
 import { FindRecipesQueryDto } from '../dtos/find-recipes-query.dto';
 
@@ -158,6 +159,32 @@ export class RecipesService {
       }
       throw error;
     }
+  }
+
+  // Modifie la quantité et/ou l'unité d'une ligne existante, avec le même
+  // contrôle d'unité que l'ajout : une unité sans équivalent est refusée et la
+  // ligne reste intacte.
+  async updateIngredient(
+    userId: string,
+    recipeId: string,
+    ingredientId: string,
+    dto: UpdateRecipeIngredientDto,
+  ) {
+    await this.ensureOwnedRecipe(userId, recipeId);
+    const where = { recipeId_ingredientId: { recipeId, ingredientId } };
+    const line = await this.prisma.recipeIngredient.findUnique({ where });
+    if (!line) {
+      throw new NotFoundException("Cet ingrédient n'est pas dans la recette");
+    }
+
+    const unit = dto.unit ?? line.unit;
+    await this.assertIngredientUnits(userId, [{ ingredientId, unit }]);
+
+    return this.prisma.recipeIngredient.update({
+      where,
+      data: { quantity: dto.quantity ?? line.quantity, unit },
+      include: { ingredient: true },
+    });
   }
 
   async removeIngredient(

@@ -19,7 +19,11 @@ describe('RecipesService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
-    recipeIngredient: { create: jest.Mock };
+    recipeIngredient: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      update: jest.Mock;
+    };
     ingredient: { findMany: jest.Mock };
   };
   let redis: {
@@ -39,7 +43,11 @@ describe('RecipesService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
-      recipeIngredient: { create: jest.fn() },
+      recipeIngredient: {
+        create: jest.fn(),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
       ingredient: {
         // L'unité de l'ingrédient est définitive : les lignes de recette doivent
         // être dans une unité compatible.
@@ -375,5 +383,68 @@ describe('RecipesService', () => {
       }),
     ).rejects.toThrow('apparaît plusieurs fois dans la recette');
     expect(prisma.recipe.create).not.toHaveBeenCalled();
+  });
+  describe('updateIngredient()', () => {
+    const line = {
+      recipeId: 'recipe-1',
+      ingredientId: 'ingredient-1',
+      quantity: 2,
+      unit: Unit.PIECE,
+    };
+
+    beforeEach(() => {
+      prisma.recipe.findUnique.mockResolvedValue(ownedRecipe);
+      prisma.recipeIngredient.findUnique.mockResolvedValue(line);
+      prisma.recipeIngredient.update.mockResolvedValue({ ...line });
+    });
+
+    it('updates the quantity and keeps the unit of the line', async () => {
+      await service.updateIngredient('user-1', 'recipe-1', 'ingredient-1', {
+        quantity: 6,
+      });
+
+      expect(prisma.recipeIngredient.update).toHaveBeenCalledWith({
+        where: {
+          recipeId_ingredientId: {
+            recipeId: 'recipe-1',
+            ingredientId: 'ingredient-1',
+          },
+        },
+        data: { quantity: 6, unit: Unit.PIECE },
+        include: { ingredient: true },
+      });
+    });
+
+    it('refuses a unit without equivalent in the ingredient unit and leaves the line intact', async () => {
+      await expect(
+        service.updateIngredient('user-1', 'recipe-1', 'ingredient-1', {
+          unit: Unit.G,
+        }),
+      ).rejects.toThrow("L'unité g n'est pas compatible avec « Oeuf » (pièce)");
+      expect(prisma.recipeIngredient.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 when the ingredient is not in the recipe', async () => {
+      prisma.recipeIngredient.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateIngredient('user-1', 'recipe-1', 'ingredient-1', {
+          quantity: 3,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('refuses to edit the recipe of another user', async () => {
+      prisma.recipe.findUnique.mockResolvedValue({
+        ...ownedRecipe,
+        userId: 'user-2',
+      });
+
+      await expect(
+        service.updateIngredient('user-1', 'recipe-1', 'ingredient-1', {
+          quantity: 3,
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
   });
 });
