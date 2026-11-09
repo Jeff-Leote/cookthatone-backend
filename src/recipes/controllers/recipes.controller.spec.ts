@@ -18,6 +18,7 @@ describe('RecipesController', () => {
             update: jest.fn(),
             remove: jest.fn(),
             addIngredient: jest.fn(),
+            updateIngredient: jest.fn(),
             removeIngredient: jest.fn(),
             replaceSteps: jest.fn(),
           },

@@ -681,6 +681,43 @@ describe('Parcours liste de courses (e2e)', () => {
       );
     });
 
+    it('modifie la quantité et l’unité d’une ligne de recette existante', async () => {
+      const recipeRes = await request(server)
+        .post('/recipes')
+        .set('Authorization', `Bearer ${token1}`)
+        .send({
+          title: 'Ligne modifiée e2e',
+          ingredients: [{ ingredientId: farineId, quantity: 100, unit: 'G' }],
+        })
+        .expect(201);
+      const id = body<EntityId>(recipeRes).id;
+
+      const res = await request(server)
+        .patch(`/recipes/${id}/ingredients/${farineId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ quantity: 3, unit: 'CUILLERE_A_SOUPE' })
+        .expect(200);
+      expect(body<{ quantity: number; unit: string }>(res)).toMatchObject({
+        quantity: 3,
+        unit: 'CUILLERE_A_SOUPE',
+      });
+
+      const refused = await request(server)
+        .patch(`/recipes/${id}/ingredients/${farineId}`)
+        .set('Authorization', `Bearer ${token1}`)
+        .send({ unit: 'PIECE' })
+        .expect(400);
+      expect(String(body<ErrorResponse>(refused).message)).toContain(
+        "n'est pas compatible",
+      );
+
+      await request(server)
+        .patch(`/recipes/${id}/ingredients/${farineId}`)
+        .set('Authorization', `Bearer ${token2}`)
+        .send({ quantity: 1 })
+        .expect(403);
+    });
+
     it('compare 63 cuillères à soupe (630 g) au stock de 500 g', async () => {
       const recipeRes = await request(server)
         .post('/recipes')

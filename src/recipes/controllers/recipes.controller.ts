@@ -20,6 +20,7 @@ import { RecipesService } from '../services/recipes.service';
 import { CreateRecipeDto } from '../dtos/create-recipe.dto';
 import { UpdateRecipeDto } from '../dtos/update-recipe.dto';
 import { RecipeIngredientDto } from '../dtos/recipe-ingredient.dto';
+import { UpdateRecipeIngredientDto } from '../dtos/update-recipe-ingredient.dto';
 import { ReplaceRecipeStepsDto } from '../dtos/replace-recipe-steps.dto';
 import { FindRecipesQueryDto } from '../dtos/find-recipes-query.dto';
 
@@ -70,6 +71,21 @@ export class RecipesController {
     @Body() dto: RecipeIngredientDto,
   ) {
     return this.recipesService.addIngredient(req.user.userId, id, dto);
+  }
+
+  @Patch(':id/ingredients/:iid')
+  updateIngredient(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Param('iid') ingredientId: string,
+    @Body() dto: UpdateRecipeIngredientDto,
+  ) {
+    return this.recipesService.updateIngredient(
+      req.user.userId,
+      id,
+      ingredientId,
+      dto,
+    );
   }
 
   @Delete(':id/ingredients/:iid')
