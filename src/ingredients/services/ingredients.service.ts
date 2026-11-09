@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, Unit } from '@prisma/client';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import {
   areUnitsCompatible,
@@ -78,26 +78,55 @@ export class IngredientsService {
     }
 
     if (!areUnitsCompatible(ingredient.defaultUnit, newUnit, newEquivalence)) {
+      // Seules les utilisations qui deviendraient incohérentes bloquent : une
+      // ligne déjà dans une unité compatible avec la nouvelle unité ne pose
+      // aucun problème.
+      const incompatible = (unit: Unit) =>
+        !areUnitsCompatible(unit, newUnit, newEquivalence);
       const [recipeLines, stockRows, validatedItems] = await Promise.all([
-        this.prisma.recipeIngredient.count({ where: { ingredientId: id } }),
-        this.prisma.stock.count({ where: { ingredientId: id } }),
-        this.prisma.shoppingItem.count({
+        this.prisma.recipeIngredient.findMany({
+          where: { ingredientId: id },
+          select: { unit: true, recipe: { select: { title: true } } },
+        }),
+        this.prisma.stock.findMany({
+          where: { ingredientId: id },
+          select: { unit: true },
+        }),
+        this.prisma.shoppingItem.findMany({
           where: { ingredientId: id, list: { validated: true } },
+          select: { unit: true },
         }),
       ]);
-      if (recipeLines + stockRows + validatedItems > 0) {
+      const blockingLines = recipeLines.filter((line) =>
+        incompatible(line.unit),
+      );
+      const blockingStock = stockRows.filter((row) => incompatible(row.unit));
+      const blockingItems = validatedItems.filter((item) =>
+        incompatible(item.unit),
+      );
+      if (
+        blockingLines.length + blockingStock.length + blockingItems.length >
+        0
+      ) {
+        const titles = [
+          ...new Set(blockingLines.map((line) => `« ${line.recipe.title} »`)),
+        ]
+          .slice(0, 3)
+          .join(', ');
         const usage = [
-          recipeLines > 0 ? `${recipeLines} ligne(s) de recette` : null,
-          stockRows > 0 ? 'le stock' : null,
-          validatedItems > 0 ? 'des listes de courses validées' : null,
+          blockingLines.length > 0
+            ? `${blockingLines.length} ligne(s) de recette ${titles}`
+            : null,
+          blockingStock.length > 0 ? 'le stock' : null,
+          blockingItems.length > 0 ? 'des listes de courses validées' : null,
         ]
           .filter(Boolean)
           .join(', ');
         const tip = isMassVolumePair(ingredient.defaultUnit, newUnit)
           ? " Renseigne d'abord l'équivalence de l'ingrédient (poids d'une cuillère à soupe)."
-          : " Corrige d'abord ces données.";
+          : " Corrige d'abord ces lignes (change leur unité dans la recette ou dans le stock).";
         throw new ConflictException(
-          `Impossible de passer « ${ingredient.name} » de ${unitLabel(ingredient.defaultUnit)} à ${unitLabel(newUnit)} : il est utilisé (${usage}) et ces unités n'ont pas d'équivalent.${tip}`,
+          `Impossible de passer « ${ingredient.name} » de ${unitLabel(ingredient.defaultUnit)} à ${unitLabel(newUnit)} : il est utilisé (${usage}) dans une unité sans équivalent.${tip}`,
         );
       }
     }

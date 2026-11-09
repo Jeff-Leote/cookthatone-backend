@@ -14,10 +14,9 @@ describe('IngredientsService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
-    recipeIngredient: { count: jest.Mock };
-    shoppingItem: { count: jest.Mock };
+    recipeIngredient: { findMany: jest.Mock };
+    shoppingItem: { findMany: jest.Mock };
     stock: {
-      count: jest.Mock;
       findMany: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
@@ -41,10 +40,9 @@ describe('IngredientsService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
-      recipeIngredient: { count: jest.fn().mockResolvedValue(0) },
-      shoppingItem: { count: jest.fn().mockResolvedValue(0) },
+      recipeIngredient: { findMany: jest.fn().mockResolvedValue([]) },
+      shoppingItem: { findMany: jest.fn().mockResolvedValue([]) },
       stock: {
-        count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({}),
         delete: jest.fn().mockResolvedValue({}),
@@ -172,7 +170,7 @@ describe('IngredientsService', () => {
         where: { id: 'ingredient-1' },
         data: { defaultUnit: Unit.KG },
       });
-      expect(prisma.recipeIngredient.count).not.toHaveBeenCalled();
+      expect(prisma.recipeIngredient.findMany).not.toHaveBeenCalled();
     });
 
     it('removes a stock line that rounds down to zero after conversion', async () => {
@@ -198,13 +196,57 @@ describe('IngredientsService', () => {
         ...ownedIngredient,
         defaultUnit: Unit.G,
       });
-      prisma.recipeIngredient.count.mockResolvedValue(2);
-      prisma.stock.count.mockResolvedValue(1);
+      prisma.recipeIngredient.findMany.mockResolvedValue([
+        { unit: Unit.G, recipe: { title: 'Pâtes Carbo' } },
+        { unit: Unit.KG, recipe: { title: 'Pâtes Carbo' } },
+      ]);
+      prisma.stock.findMany.mockResolvedValue([{ unit: Unit.G }]);
 
       await expect(
         service.update('user-1', 'ingredient-1', { defaultUnit: Unit.ML }),
-      ).rejects.toThrow('il est utilisé (2 ligne(s) de recette, le stock)');
+      ).rejects.toThrow(
+        'il est utilisé (2 ligne(s) de recette « Pâtes Carbo », le stock)',
+      );
       expect(prisma.ingredient.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a change of family when every usage is already in a compatible unit', async () => {
+      prisma.ingredient.findUnique.mockResolvedValue({
+        ...ownedIngredient,
+        defaultUnit: Unit.PIECE,
+      });
+      prisma.recipeIngredient.findMany.mockResolvedValue([
+        { unit: Unit.G, recipe: { title: 'Poulet Toscane' } },
+      ]);
+      prisma.stock.findMany.mockResolvedValue([
+        { id: 'stock-1', quantity: 500, unit: Unit.G },
+      ]);
+      prisma.ingredient.update.mockResolvedValue({
+        ...ownedIngredient,
+        defaultUnit: Unit.G,
+      });
+
+      const result = await service.update('user-1', 'ingredient-1', {
+        defaultUnit: Unit.G,
+      });
+
+      expect(result.defaultUnit).toBe(Unit.G);
+      expect(prisma.ingredient.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('still refuses when only some usages are compatible', async () => {
+      prisma.ingredient.findUnique.mockResolvedValue({
+        ...ownedIngredient,
+        defaultUnit: Unit.PIECE,
+      });
+      prisma.recipeIngredient.findMany.mockResolvedValue([
+        { unit: Unit.G, recipe: { title: 'Poulet Toscane' } },
+        { unit: Unit.PIECE, recipe: { title: 'Riz poulet coco' } },
+      ]);
+
+      await expect(
+        service.update('user-1', 'ingredient-1', { defaultUnit: Unit.G }),
+      ).rejects.toThrow('1 ligne(s) de recette « Riz poulet coco »');
     });
 
     it('allows a change of family when the ingredient is not used', async () => {
@@ -266,7 +308,7 @@ describe('IngredientsService', () => {
         where: { id: 'stock-1' },
         data: { quantity: 1500, unit: Unit.ML },
       });
-      expect(prisma.recipeIngredient.count).not.toHaveBeenCalled();
+      expect(prisma.recipeIngredient.findMany).not.toHaveBeenCalled();
     });
 
     it('sets the equivalence and the unit together to allow a change of family', async () => {
@@ -275,7 +317,6 @@ describe('IngredientsService', () => {
         defaultUnit: Unit.G,
         gramsPerTablespoon: null,
       });
-      prisma.recipeIngredient.count.mockResolvedValue(3);
       prisma.ingredient.update.mockResolvedValue({});
 
       await service.update('user-1', 'ingredient-1', {
@@ -314,7 +355,9 @@ describe('IngredientsService', () => {
         defaultUnit: Unit.G,
         gramsPerTablespoon: null,
       });
-      prisma.recipeIngredient.count.mockResolvedValue(1);
+      prisma.recipeIngredient.findMany.mockResolvedValue([
+        { unit: Unit.G, recipe: { title: 'Gâteau' } },
+      ]);
 
       await expect(
         service.update('user-1', 'ingredient-1', { defaultUnit: Unit.ML }),
