@@ -1,4 +1,8 @@
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
@@ -17,19 +21,36 @@ describe('AuthService', () => {
       update: jest.Mock;
     };
   };
-  let emailService: { sendVerificationEmail: jest.Mock };
+  let emailService: {
+    sendVerificationEmail: jest.Mock;
+    sendPasswordResetEmail: jest.Mock;
+  };
   let jwtService: { sign: jest.Mock; verify: jest.Mock };
 
-  const existingUser = {
+  const existingUser: {
+    id: string;
+    email: string;
+    pseudo: string;
+    passwordHash: string;
+    emailVerified: boolean;
+    passwordResetToken: string | null;
+    passwordResetExpiry: Date | null;
+  } = {
     id: 'user-1',
     email: 'jane@example.com',
     pseudo: 'jane',
     passwordHash: '',
     emailVerified: true,
+    passwordResetToken: null,
+    passwordResetExpiry: null,
   };
+
+  // Hash du token utilisé dans les cas nominaux de resetPassword
+  let validResetTokenHash: string;
 
   beforeAll(async () => {
     existingUser.passwordHash = await bcrypt.hash('correct-password', 10);
+    validResetTokenHash = await bcrypt.hash('valid-reset.jwt.token', 10);
   });
 
   beforeEach(async () => {
@@ -41,7 +62,10 @@ describe('AuthService', () => {
         update: jest.fn(),
       },
     };
-    emailService = { sendVerificationEmail: jest.fn() };
+    emailService = {
+      sendVerificationEmail: jest.fn(),
+      sendPasswordResetEmail: jest.fn(),
+    };
     jwtService = {
       sign: jest.fn().mockReturnValue('signed.jwt.token'),
       verify: jest.fn(),
@@ -226,6 +250,279 @@ describe('AuthService', () => {
     await expect(service.verifyEmail('other.jwt.token')).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // verifyEmail() avec un token ayant purpose 'password-reset' -> rejeté (401)
+  // (garantit l'isolation entre les deux types de tokens)
+  it('throws UnauthorizedException when a password-reset token is used for verifyEmail', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: existingUser.id,
+      purpose: 'password-reset',
+    });
+
+    await expect(
+      service.verifyEmail('password-reset.jwt.token'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // forgotPassword() avec un email connu -> hash du token stocké en base,
+  // email de réinitialisation envoyé, réponse générique (pas de fuite d'info)
+  it('sends a password reset email when the address is registered', async () => {
+    prisma.user.findUnique.mockResolvedValue(existingUser);
+    prisma.user.update.mockResolvedValue({ ...existingUser });
+
+    const result = await service.forgotPassword(existingUser.email);
+
+    expect(result.message).toContain('Si cette adresse');
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
+    const forgotCall = (
+      prisma.user.update.mock.calls as Array<
+        [
+          {
+            where: { id: string };
+            data: { passwordResetToken: string; passwordResetExpiry: Date };
+          },
+        ]
+      >
+    )[0][0];
+    expect(forgotCall.where).toEqual({ id: existingUser.id });
+    expect(typeof forgotCall.data.passwordResetToken).toBe('string');
+    expect(forgotCall.data.passwordResetExpiry).toBeInstanceOf(Date);
+    expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
+      existingUser.email,
+      existingUser.pseudo,
+      expect.stringContaining('/reset-password?token='),
+    );
+  });
+
+  // forgotPassword() avec un email inconnu -> réponse identique, pas d'email envoyé
+  it('returns the same generic message when the address is unknown', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    const result = await service.forgotPassword('unknown@example.com');
+
+    expect(result.message).toContain('Si cette adresse');
+    expect(emailService.sendPasswordResetEmail).not.toHaveBeenCalled();
+  });
+
+  // resetPassword() avec un token valide -> mot de passe mis à jour, token effacé en base
+  it('updates the password hash with a valid reset token', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: existingUser.id,
+      purpose: 'password-reset',
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      ...existingUser,
+      passwordResetToken: validResetTokenHash,
+      passwordResetExpiry: new Date(Date.now() + 30 * 60 * 1000), // dans 30 min
+    });
+    prisma.user.update.mockResolvedValue({ ...existingUser });
+
+    const result = await service.resetPassword(
+      'valid-reset.jwt.token',
+      'newpassword123',
+    );
+
+    expect(result.message).toContain('réinitialisé');
+    const resetCall = (
+      prisma.user.update.mock.calls as Array<
+        [
+          {
+            where: { id: string };
+            data: { passwordResetToken: null; passwordResetExpiry: null };
+          },
+        ]
+      >
+    )[0][0];
+    expect(resetCall.where).toEqual({ id: existingUser.id });
+    expect(resetCall.data.passwordResetToken).toBeNull();
+    expect(resetCall.data.passwordResetExpiry).toBeNull();
+  });
+
+  // resetPassword() avec un token expiré -> UnauthorizedException (401)
+  it('throws UnauthorizedException when the reset token is expired', async () => {
+    jwtService.verify.mockImplementation(() => {
+      throw new Error('jwt expired');
+    });
+
+    await expect(
+      service.resetPassword('expired.jwt.token', 'newpassword123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // resetPassword() avec un token ayant purpose 'email-verification' -> rejeté (401)
+  it('throws UnauthorizedException when an email-verification token is used for resetPassword', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: existingUser.id,
+      purpose: 'email-verification',
+    });
+
+    await expect(
+      service.resetPassword('verify.jwt.token', 'newpassword123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // resetPassword() avec un nouveau mot de passe identique à l'ancien -> BadRequestException (400)
+  it('throws BadRequestException when the new password is the same as the current one (resetPassword)', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: existingUser.id,
+      purpose: 'password-reset',
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      ...existingUser,
+      passwordResetToken: validResetTokenHash,
+      passwordResetExpiry: new Date(Date.now() + 30 * 60 * 1000),
+    });
+
+    await expect(
+      service.resetPassword('valid-reset.jwt.token', 'correct-password'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // resetPassword() avec un userId inexistant dans le token -> UnauthorizedException (401)
+  it('throws UnauthorizedException when the user in the reset token does not exist', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: 'ghost-user-id',
+      purpose: 'password-reset',
+    });
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.resetPassword('ghost.jwt.token', 'newpassword123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // resetPassword() avec un token déjà utilisé (passwordResetToken null) -> UnauthorizedException (401)
+  it('throws UnauthorizedException when the reset token has already been used', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: existingUser.id,
+      purpose: 'password-reset',
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      ...existingUser,
+      passwordResetToken: null,
+      passwordResetExpiry: null,
+    });
+
+    await expect(
+      service.resetPassword('used.jwt.token', 'newpassword123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // resetPassword() avec un token expiré (passwordResetExpiry dans le passé) -> UnauthorizedException (401)
+  it('throws UnauthorizedException when the reset token is expired in DB', async () => {
+    jwtService.verify.mockReturnValue({
+      sub: existingUser.id,
+      purpose: 'password-reset',
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      ...existingUser,
+      passwordResetToken: validResetTokenHash,
+      passwordResetExpiry: new Date(Date.now() - 1000), // 1 seconde dans le passé
+    });
+
+    await expect(
+      service.resetPassword('valid-reset.jwt.token', 'newpassword123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // resendVerification() avec un email connu et non vérifié -> email renvoyé
+  it('resends the verification email when the account exists and is unverified', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      ...existingUser,
+      emailVerified: false,
+    });
+
+    const result = await service.resendVerification(existingUser.email);
+
+    expect(result.message).toContain('Si cette adresse');
+    expect(emailService.sendVerificationEmail).toHaveBeenCalledWith(
+      existingUser.email,
+      existingUser.pseudo,
+      expect.stringContaining('/auth/verify-email?token='),
+    );
+  });
+
+  // resendVerification() avec un compte déjà vérifié -> pas d'email, réponse identique
+  it('does not send an email when the account is already verified', async () => {
+    prisma.user.findUnique.mockResolvedValue(existingUser); // emailVerified: true
+
+    const result = await service.resendVerification(existingUser.email);
+
+    expect(result.message).toContain('Si cette adresse');
+    expect(emailService.sendVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  // resendVerification() avec un email inconnu -> réponse identique, pas d'email
+  it('returns the same generic message when the address is unknown for resend', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    const result = await service.resendVerification('unknown@example.com');
+
+    expect(result.message).toContain('Si cette adresse');
+    expect(emailService.sendVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  // changePassword() nominal : mot de passe actuel correct -> mis à jour
+  it('changes the password when currentPassword is correct', async () => {
+    prisma.user.findUnique.mockResolvedValue(existingUser);
+    prisma.user.update.mockResolvedValue({ ...existingUser });
+
+    const result = await service.changePassword(
+      existingUser.id,
+      'correct-password',
+      'newpassword123',
+    );
+
+    expect(result.message).toContain('modifié');
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: existingUser.id } }),
+    );
+  });
+
+  // changePassword() avec un nouveau mot de passe identique à l'ancien -> BadRequestException (400)
+  it('throws BadRequestException when the new password is the same as the current one (changePassword)', async () => {
+    prisma.user.findUnique.mockResolvedValue(existingUser);
+
+    await expect(
+      service.changePassword(
+        existingUser.id,
+        'correct-password',
+        'correct-password',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // changePassword() avec un mauvais mot de passe actuel -> UnauthorizedException (401)
+  it('throws UnauthorizedException when currentPassword is wrong', async () => {
+    prisma.user.findUnique.mockResolvedValue(existingUser);
+
+    await expect(
+      service.changePassword(
+        existingUser.id,
+        'wrong-password',
+        'newpassword123',
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // changePassword() avec un userId inexistant (session invalide) -> UnauthorizedException (401)
+  it('throws UnauthorizedException when the user does not exist for changePassword', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.changePassword('ghost-id', 'correct-password', 'newpassword123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,11 @@
-import { IsEmail, IsString, Length, Matches, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class RegisterDto {
   @IsEmail({}, { message: "L'adresse email n'est pas valide" })
@@ -17,6 +24,9 @@ export class RegisterDto {
   @IsString({ message: 'Le mot de passe doit être une chaîne de caractères' })
   @MinLength(8, {
     message: 'Le mot de passe doit contenir au moins 8 caractères',
+  })
+  @MaxLength(72, {
+    message: 'Le mot de passe ne peut pas dépasser 72 caractères',
   })
   password: string;
 }

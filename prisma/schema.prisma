@@ -42,9 +42,13 @@ model User {
   email         String   @unique
   pseudo        String   @unique
   passwordHash  String   @map("password_hash")
-  emailVerified Boolean  @default(false) @map("email_verified")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  emailVerified       Boolean   @default(false) @map("email_verified")
+  // Hash bcrypt du token de réinitialisation de mot de passe (jamais le token brut).
+  // Révocation garantie : on efface ces deux champs après usage ou expiration.
+  passwordResetToken  String?   @unique @map("password_reset_token")
+  passwordResetExpiry DateTime? @map("password_reset_expiry")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
   // Relations
   recipes         Recipe[]
@@ -86,19 +90,19 @@ model Recipe {
 // ============================================================
 
 model Ingredient {
-  id          String @id @default(uuid())
-  userId      String @map("user_id")
-  name        String
-  defaultUnit Unit   @map("default_unit")
+  id                 String @id @default(uuid())
+  userId             String @map("user_id")
+  name               String
+  defaultUnit        Unit   @map("default_unit")
   // Poids d'une cuillère à soupe (15 ml) en grammes : permet de passer du poids
   // au volume pour cet ingrédient (farine ≈ 10 g). Absent = conversion refusée.
   gramsPerTablespoon Float? @map("grams_per_tablespoon")
 
   // Relations
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  recipeIngredients RecipeIngredient[]
-  stocks            Stock[]
-  shoppingItems     ShoppingItem[]
+  user                 User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipeIngredients    RecipeIngredient[]
+  stocks               Stock[]
+  shoppingItems        ShoppingItem[]
   calendarConsumptions CalendarEntryConsumption[]
 
   // Un utilisateur ne peut pas avoir deux ingrédients avec le même nom
@@ -163,9 +167,9 @@ model CalendarEntry {
   createdAt      DateTime  @default(now()) @map("created_at")
 
   // Relations
-  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  recipe       Recipe  @relation("PlannedRecipe", fields: [recipeId], references: [id], onDelete: Restrict)
-  actualRecipe Recipe? @relation("ActualRecipe", fields: [actualRecipeId], references: [id], onDelete: SetNull)
+  user         User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipe       Recipe                     @relation("PlannedRecipe", fields: [recipeId], references: [id], onDelete: Restrict)
+  actualRecipe Recipe?                    @relation("ActualRecipe", fields: [actualRecipeId], references: [id], onDelete: SetNull)
   consumptions CalendarEntryConsumption[]
 
   // Un utilisateur ne peut avoir qu'une recette par créneau par jour
@@ -249,17 +253,17 @@ model ShoppingList {
 // ============================================================
 
 model ShoppingItem {
-  id                 String  @id @default(uuid())
-  listId             String  @map("list_id")
-  ingredientId       String  @map("ingredient_id")
-  quantityNeeded     Float   @map("quantity_needed")
-  quantityInStock    Float   @default(0) @map("quantity_in_stock")
-  unit               Unit
-  checked            Boolean @default(false)
+  id                String  @id @default(uuid())
+  listId            String  @map("list_id")
+  ingredientId      String  @map("ingredient_id")
+  quantityNeeded    Float   @map("quantity_needed")
+  quantityInStock   Float   @default(0) @map("quantity_in_stock")
+  unit              Unit
+  checked           Boolean @default(false)
   // Quantité réellement ajoutée au stock lors de la validation de la liste.
   // Permet de "dévalider" la liste en retirant exactement ce qui a été ajouté,
   // même si le stock a changé depuis (ex: consommation via le calendrier).
-  purchasedQuantity  Float   @default(0) @map("purchased_quantity")
+  purchasedQuantity Float   @default(0) @map("purchased_quantity")
 
   // Relations
   list       ShoppingList @relation(fields: [listId], references: [id], onDelete: Cascade)
