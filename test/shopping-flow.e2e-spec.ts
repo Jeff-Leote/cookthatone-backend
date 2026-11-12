@@ -81,8 +81,14 @@ describe('Parcours liste de courses (e2e)', () => {
   // Deux jours consécutifs proches dans le futur : indépendants de la date
   // du jour d'exécution, jamais en conflit avec une donnée déjà existante
   // puisque les utilisateurs de test sont créés à la volée.
-  const day1 = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
-  const day2 = new Date(Date.now() + 11 * 24 * 60 * 60 * 1000);
+  // Si +10 jours tombe un dimanche, on recule d'un jour (samedi) : samedi et
+  // dimanche sont dans la même semaine lun-dim pour splitIntoWeeks, alors que
+  // dimanche+lundi sont dans deux semaines différentes → deux listes séparées.
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const base = new Date(Date.now() + 10 * MS_PER_DAY);
+  const day1 =
+    base.getUTCDay() === 0 ? new Date(base.getTime() - MS_PER_DAY) : base;
+  const day2 = new Date(day1.getTime() + MS_PER_DAY);
   const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
   beforeAll(async () => {
