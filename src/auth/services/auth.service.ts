@@ -7,12 +7,15 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, type User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { EmailService } from '../../email/services/email.service';
 import { RegisterDto } from '../dtos/register.dto';
 import { LoginDto } from '../dtos/login.dto';
 
 const UNIQUE_CONSTRAINT_VIOLATION = 'P2002';
+
+const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
 
 const SALT_ROUNDS = 10;
 const EMAIL_VERIFICATION_PURPOSE = 'email-verification';
@@ -96,7 +99,11 @@ export class AuthService {
       );
     }
 
-    return { access_token: this.signToken(user.id) };
+    const refreshToken = await this.createRefreshToken(user.id);
+    return {
+      access_token: this.signToken(user.id),
+      refresh_token: refreshToken,
+    };
   }
 
   async verifyEmail(token: string) {
@@ -244,6 +251,7 @@ export class AuthService {
         passwordResetExpiry: null,
       },
     });
+    await this.prisma.refreshToken.deleteMany({ where: { userId: user.id } });
 
     return { message: 'Ton mot de passe a bien été réinitialisé.' };
   }
@@ -298,8 +306,69 @@ export class AuthService {
       where: { id: userId },
       data: { passwordHash },
     });
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
 
     return { message: 'Ton mot de passe a bien été modifié.' };
+  }
+
+  async refresh(
+    rawToken: string,
+  ): Promise<{ access_token: string; refresh_token: string }> {
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const stored = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+    });
+    if (!stored) {
+      throw new UnauthorizedException(
+        'Session expirée, merci de te reconnecter',
+      );
+    }
+    if (stored.expiresAt <= new Date()) {
+      await this.prisma.refreshToken.delete({ where: { tokenHash } });
+      throw new UnauthorizedException(
+        'Session expirée, merci de te reconnecter',
+      );
+    }
+    // Rotation atomique : supprime l'ancien token et crée le nouveau en une
+    // seule transaction pour éviter qu'une coupure laisse le client sans token.
+    const newRawToken = randomBytes(32).toString('hex');
+    const newTokenHash = createHash('sha256').update(newRawToken).digest('hex');
+    const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS);
+
+    await this.prisma.$transaction([
+      this.prisma.refreshToken.delete({ where: { tokenHash } }),
+      this.prisma.refreshToken.create({
+        data: {
+          tokenHash: newTokenHash,
+          userId: stored.userId,
+          expiresAt: newExpiresAt,
+        },
+      }),
+    ]);
+
+    return {
+      access_token: this.signToken(stored.userId),
+      refresh_token: newRawToken,
+    };
+  }
+
+  async logout(rawToken: string): Promise<{ message: string }> {
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    await this.prisma.refreshToken.deleteMany({ where: { tokenHash } });
+    return { message: 'Déconnecté.' };
+  }
+
+  private async createRefreshToken(userId: string): Promise<string> {
+    const rawToken = randomBytes(32).toString('hex');
+    // SHA-256 suffit ici : le token source est randomBytes(32) = 256 bits d'entropie,
+    // ce qui rend le brute-force impossible. Contrairement au password reset (token JWT
+    // prévisible), bcrypt n'apporte rien de plus pour un token purement aléatoire.
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS);
+    await this.prisma.refreshToken.create({
+      data: { tokenHash, userId, expiresAt },
+    });
+    return rawToken;
   }
 
   private signToken(userId: string): string {

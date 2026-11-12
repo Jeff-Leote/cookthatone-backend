@@ -26,6 +26,7 @@ import { ForgotPasswordDto } from '../dtos/forgot-password.dto';
 import { ResetPasswordDto } from '../dtos/reset-password.dto';
 import { ResendVerificationDto } from '../dtos/resend-verification.dto';
 import { ChangePasswordDto } from '../dtos/change-password.dto';
+import { RefreshTokenDto } from '../dtos/refresh-token.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../interfaces/authenticated-request.interface';
 
@@ -36,6 +37,10 @@ const BRUTE_FORCE_THROTTLE = { default: { limit: 5, ttl: 60000 } };
 // 3 requêtes par 15 minutes et par IP : évite le spam d'emails
 // (réinitialisation de mot de passe, renvoi de vérification).
 const EMAIL_SPAM_THROTTLE = { default: { limit: 3, ttl: 900000 } };
+
+// 20 renouvellements par minute et par IP : plus permissif que BRUTE_FORCE car
+// le refresh est un usage normal du client (access_token dure 15 min).
+const REFRESH_THROTTLE = { default: { limit: 20, ttl: 60000 } };
 
 @ApiTags('auth')
 @Controller('auth')
@@ -53,6 +58,28 @@ export class AuthController {
   @Throttle(BRUTE_FORCE_THROTTLE)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(REFRESH_THROTTLE)
+  @ApiOperation({ summary: "Renouveler le jeton d'accès via le refresh token" })
+  @ApiResponse({
+    status: 200,
+    description: 'Nouveau access_token + refresh_token (rotation)',
+  })
+  @ApiResponse({ status: 401, description: 'Refresh token invalide ou expiré' })
+  @ApiResponse({ status: 429, description: 'Trop de tentatives' })
+  refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refresh(dto.refreshToken);
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Déconnexion et révocation du refresh token' })
+  @ApiResponse({ status: 200, description: 'Déconnecté' })
+  logout(@Body() dto: RefreshTokenDto) {
+    return this.authService.logout(dto.refreshToken);
   }
 
   @Get('me')

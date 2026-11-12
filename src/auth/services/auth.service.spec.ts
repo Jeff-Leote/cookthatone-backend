@@ -7,6 +7,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/services/prisma.service';
 import { EmailService } from '../../email/services/email.service';
 import { AuthService } from './auth.service';
@@ -20,6 +21,13 @@ describe('AuthService', () => {
       create: jest.Mock;
       update: jest.Mock;
     };
+    refreshToken: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      delete: jest.Mock;
+      deleteMany: jest.Mock;
+    };
+    $transaction: jest.Mock;
   };
   let emailService: {
     sendVerificationEmail: jest.Mock;
@@ -61,6 +69,17 @@ describe('AuthService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      refreshToken: {
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        delete: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      // $transaction exécute le tableau d'opérations passé (compatibilité
+      // avec le mode « batch » utilisé dans refresh()).
+      $transaction: jest
+        .fn()
+        .mockImplementation((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
     emailService = {
       sendVerificationEmail: jest.fn(),
@@ -164,16 +183,20 @@ describe('AuthService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  // T03: login() avec des credentials valides + compte vérifié -> access_token retourne
-  it('logs in with valid credentials and returns an access_token', async () => {
+  // T03: login() avec des credentials valides + compte vérifié -> access_token + refresh_token retournés
+  it('logs in with valid credentials and returns an access_token and refresh_token', async () => {
     prisma.user.findUnique.mockResolvedValue(existingUser);
+    prisma.refreshToken.create.mockResolvedValue({});
 
     const result = await service.login({
       email: existingUser.email,
       password: 'correct-password',
     });
 
-    expect(result).toEqual({ access_token: 'signed.jwt.token' });
+    expect(result.access_token).toBe('signed.jwt.token');
+    expect(typeof result.refresh_token).toBe('string');
+    expect(result.refresh_token).toHaveLength(64);
+    expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
   });
 
   // T04: login() avec un mauvais mot de passe -> UnauthorizedException (401)
@@ -524,5 +547,78 @@ describe('AuthService', () => {
       service.changePassword('ghost-id', 'correct-password', 'newpassword123'),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // T18: refresh() avec un token valide -> { access_token, refresh_token }
+  it('refresh() returns new access_token and refresh_token for a valid token', async () => {
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const storedRecord = {
+      id: '1',
+      tokenHash,
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() + 999999),
+      createdAt: new Date(),
+    };
+    prisma.refreshToken.findUnique.mockResolvedValue(storedRecord);
+    // delete et create sont appelés à l'intérieur du tableau passé à $transaction
+    prisma.refreshToken.delete.mockResolvedValue(storedRecord);
+    prisma.refreshToken.create.mockResolvedValue(storedRecord);
+
+    const result = await service.refresh(rawToken);
+
+    expect(result.access_token).toBe('signed.jwt.token');
+    expect(typeof result.refresh_token).toBe('string');
+    expect(result.refresh_token).toHaveLength(64);
+    // La rotation doit passer par $transaction (atomicité)
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  // T19: refresh() avec un token inexistant -> UnauthorizedException (401)
+  it('refresh() throws UnauthorizedException when the token is not found', async () => {
+    prisma.refreshToken.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.refresh(randomBytes(32).toString('hex')),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.refreshToken.delete).not.toHaveBeenCalled();
+  });
+
+  // T20: refresh() avec un token expiré (expiresAt dans le passé) -> UnauthorizedException (401)
+  it('refresh() throws UnauthorizedException and deletes the expired token', async () => {
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const expiredRecord = {
+      id: '2',
+      tokenHash,
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() - 1000), // 1 seconde dans le passé
+      createdAt: new Date(),
+    };
+    prisma.refreshToken.findUnique.mockResolvedValue(expiredRecord);
+    prisma.refreshToken.delete.mockResolvedValue(expiredRecord);
+
+    await expect(service.refresh(rawToken)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    // Le token expiré doit être supprimé proprement
+    expect(prisma.refreshToken.delete).toHaveBeenCalledWith({
+      where: { tokenHash },
+    });
+    expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+
+  // T21: logout() token quelconque -> résout sans erreur (deleteMany appelé)
+  it('logout() resolves without error and calls deleteMany', async () => {
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    prisma.refreshToken.deleteMany.mockResolvedValue({ count: 1 });
+
+    const result = await service.logout(rawToken);
+
+    expect(result).toEqual({ message: 'Déconnecté.' });
+    expect(prisma.refreshToken.deleteMany).toHaveBeenCalledWith({
+      where: { tokenHash },
+    });
   });
 });
