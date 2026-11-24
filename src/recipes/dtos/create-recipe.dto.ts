@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -7,8 +8,14 @@ import {
   IsPositive,
   IsString,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import {
+  HTTP_URL_MAX_LENGTH,
+  httpUrlMessage,
+  IsHttpUrl,
+} from '../../common/decorators/is-http-url.decorator';
 import { Sanitize } from '../../common/decorators/sanitize.decorator';
 import { RecipeIngredientDto } from './recipe-ingredient.dto';
 import { RecipeStepDto } from './recipe-step.dto';
@@ -38,6 +45,16 @@ export class CreateRecipeDto {
   @IsInt({ message: 'Le nombre de portions doit être un entier' })
   @IsPositive({ message: 'Le nombre de portions doit être positif' })
   servings?: number;
+
+  // Pas de @Sanitize() : il réécrirait les « & » de l'adresse.
+  @ApiPropertyOptional({
+    description: "Adresse de la page d'origine de la recette (http ou https)",
+    example: 'https://exemple.fr/recettes/tarte',
+    maxLength: HTTP_URL_MAX_LENGTH,
+  })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsHttpUrl({ message: httpUrlMessage("L'adresse de la source") })
+  sourceUrl?: string;
 
   @IsOptional()
   @IsArray({ message: 'Les ingrédients doivent être une liste' })
