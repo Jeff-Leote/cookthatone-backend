@@ -210,13 +210,24 @@ export class AuthController {
   }
 
   private renderVerifyPage(title: string, message: string): string {
+    const t = escapeHtml(title);
+    const m = escapeHtml(message);
     return `<!doctype html>
 <html lang="fr">
-<head><meta charset="utf-8"><title>${title} — CookthatOne</title></head>
+<head><meta charset="utf-8"><title>${t} — CookthatOne</title></head>
 <body style="font-family: sans-serif; text-align: center; padding: 4rem 1rem;">
-  <h1>${title}</h1>
-  <p>${message}</p>
+  <h1>${t}</h1>
+  <p>${m}</p>
 </body>
 </html>`;
   }
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
