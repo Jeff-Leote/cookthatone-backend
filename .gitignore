@@ -39,3 +39,7 @@ CookthatOne-Backend-Guide.pdf
 
 # sauvegardes du script de rattrapage des unités
 /sauvegarde-unites-*.json
+
+# sauvegardes de la base (données personnelles, voir docs/SAUVEGARDES.md)
+*.dump
+/liste.txt
