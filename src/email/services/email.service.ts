@@ -1,6 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Unit } from '@prisma/client';
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 const BREVO_SEND_URL = 'https://api.brevo.com/v3/smtp/email';
 
 const UNIT_LABEL: Record<Unit, string> = {
@@ -35,9 +44,9 @@ export class EmailService {
       to,
       'Confirme ton adresse email — CookthatOne',
       `
-        <p>Bonjour ${pseudo},</p>
+        <p>Bonjour ${escapeHtml(pseudo)},</p>
         <p>Merci de t'être inscrit sur CookthatOne. Clique sur le lien ci-dessous pour valider ton adresse email et activer ton compte :</p>
-        <p><a href="${verifyUrl}">${verifyUrl}</a></p>
+        <p><a href="${verifyUrl}">${escapeHtml(verifyUrl)}</a></p>
         <p>Ce lien expire dans 24 heures.</p>
       `,
       "l'email de vérification",
@@ -49,9 +58,9 @@ export class EmailService {
       to,
       'Réinitialise ton mot de passe — CookthatOne',
       `
-        <p>Bonjour ${pseudo},</p>
+        <p>Bonjour ${escapeHtml(pseudo)},</p>
         <p>Tu as demandé à réinitialiser ton mot de passe sur CookthatOne. Clique sur le lien ci-dessous pour choisir un nouveau mot de passe :</p>
-        <p><a href="${resetUrl}">${resetUrl}</a></p>
+        <p><a href="${resetUrl}">${escapeHtml(resetUrl)}</a></p>
         <p>Ce lien expire dans 1 heure. Si tu n'es pas à l'origine de cette demande, ignore cet email.</p>
       `,
       "l'email de réinitialisation du mot de passe",
@@ -67,7 +76,7 @@ export class EmailService {
     const items = deficits
       .map(
         (d) =>
-          `<li>${d.ingredientName} : il vous manque ${d.missing} ${UNIT_LABEL[d.unit]}</li>`,
+          `<li>${escapeHtml(d.ingredientName)} : il vous manque ${d.missing} ${UNIT_LABEL[d.unit]}</li>`,
       )
       .join('');
 
@@ -75,8 +84,8 @@ export class EmailService {
       to,
       `Stock insuffisant pour "${recipeTitle}" — CookthatOne`,
       `
-        <p>Bonjour ${pseudo},</p>
-        <p>Vous avez validé la recette <strong>${recipeTitle}</strong>, mais votre stock ne couvrait pas tous les ingrédients nécessaires :</p>
+        <p>Bonjour ${escapeHtml(pseudo)},</p>
+        <p>Vous avez validé la recette <strong>${escapeHtml(recipeTitle)}</strong>, mais votre stock ne couvrait pas tous les ingrédients nécessaires :</p>
         <ul>${items}</ul>
         <p>N'oubliez pas de faire vos courses ou de remettre votre stock à jour.</p>
       `,
