@@ -51,8 +51,19 @@ npx prisma studio    # localhost:5555
 ## Tests
 
 ```bash
-npm run test:cov
+npm run test:cov   # tests unitaires (Jest, mocks Prisma)
+npm run test:e2e   # tests e2e (Postgres + Redis locaux requis)
 ```
+
+181 tests unitaires · 18 suites · 4 suites e2e
+
+## Sécurité
+
+- **Access token** : JWT, durée 15 min, stocké en mémoire côté client (jamais en localStorage)
+- **Refresh token** : opaque, durée 7 jours, haché SHA-256 en base ; cookie `httpOnly; SameSite=strict; path=/api/auth/` côté frontend ; rotation à chaque `/auth/refresh`
+- **Rate-limiting** : `/auth/login` limité à 5 req/min par IP ; `/auth/forgot-password` et `/auth/resend-verification` à 3 req/15 min par IP ; `/health` exclu du rate-limiter
+- **Body limit** : 10 Ko sur toutes les routes
+- **Trust proxy** activé pour les adresses Render
 
 ## Documentation API
 
