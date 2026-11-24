@@ -55,7 +55,7 @@ npm run test:cov   # tests unitaires (Jest, mocks Prisma)
 npm run test:e2e   # tests e2e (Postgres + Redis locaux requis)
 ```
 
-181 tests unitaires · 18 suites · 4 suites e2e
+429 tests unitaires · 25 suites · 4 suites e2e
 
 ## Sécurité
 
