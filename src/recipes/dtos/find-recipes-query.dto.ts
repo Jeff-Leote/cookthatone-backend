@@ -1,9 +1,18 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsPositive, IsString } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsPositive,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class FindRecipesQueryDto {
   @IsOptional()
   @IsString({ message: 'La recherche doit être une chaîne de caractères' })
+  @MaxLength(100, {
+    message: 'La recherche ne peut pas dépasser 100 caractères',
+  })
   search?: string;
 
   @IsOptional()
