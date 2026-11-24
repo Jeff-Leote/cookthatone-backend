@@ -91,6 +91,10 @@ model Recipe {
   description String?
   prepTimeMin Int?     @map("prep_time_min")
   cookTimeMin Int?     @map("cook_time_min")
+  // Adresse de la page d'origine d'une recette importée par URL (pour citer la source).
+  // Nullable : une recette saisie à la main n'en a pas. Le format http(s) et la
+  // longueur sont validés par l'API (DTO), jamais par la base.
+  sourceUrl   String?  @map("source_url")
   servings    Int      @default(2)
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")

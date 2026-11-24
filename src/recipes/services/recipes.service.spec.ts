@@ -176,6 +176,98 @@ describe('RecipesService', () => {
     expect(redis.deleteByPrefix).toHaveBeenCalledWith('recipes:user-1:');
   });
 
+  describe('sourceUrl', () => {
+    const sourceUrl = 'https://exemple.fr/recette?a=1&b=2';
+
+    it('stores the source address on creation', async () => {
+      prisma.recipe.create.mockResolvedValue({ ...ownedRecipe, sourceUrl });
+
+      const result = await service.create('user-1', {
+        title: 'Tarte',
+        sourceUrl,
+      });
+
+      expect(result).toEqual(expect.objectContaining({ sourceUrl }));
+      expect(prisma.recipe.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ sourceUrl }) as unknown,
+        }),
+      );
+    });
+
+    it('creates a recipe without source when none is given', async () => {
+      prisma.recipe.create.mockResolvedValue({
+        ...ownedRecipe,
+        sourceUrl: null,
+      });
+
+      const result = await service.create('user-1', { title: 'Tarte' });
+
+      expect(result).toEqual(expect.objectContaining({ sourceUrl: null }));
+      expect(prisma.recipe.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ sourceUrl: undefined }) as unknown,
+        }),
+      );
+    });
+
+    it('replaces the source address on update', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(ownedRecipe);
+      prisma.recipe.update.mockResolvedValue({ ...ownedRecipe, sourceUrl });
+
+      await service.update('user-1', 'recipe-1', { sourceUrl });
+
+      expect(prisma.recipe.update).toHaveBeenCalledWith({
+        where: { id: 'recipe-1' },
+        data: { sourceUrl },
+      });
+      expect(redis.deleteByPrefix).toHaveBeenCalledWith('recipes:user-1:');
+    });
+
+    it('clears the source address when update receives null', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(ownedRecipe);
+      prisma.recipe.update.mockResolvedValue({
+        ...ownedRecipe,
+        sourceUrl: null,
+      });
+
+      await service.update('user-1', 'recipe-1', { sourceUrl: null });
+
+      expect(prisma.recipe.update).toHaveBeenCalledWith({
+        where: { id: 'recipe-1' },
+        data: { sourceUrl: null },
+      });
+    });
+
+    it('leaves the source address untouched when the field is absent', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(ownedRecipe);
+      prisma.recipe.update.mockResolvedValue({
+        ...ownedRecipe,
+        title: 'Autre',
+      });
+
+      await service.update('user-1', 'recipe-1', { title: 'Autre' });
+
+      const [{ data }] = prisma.recipe.update.mock.calls[0] as [
+        { data: Record<string, unknown> },
+      ];
+      expect(data).toEqual({ title: 'Autre' });
+      expect('sourceUrl' in data).toBe(false);
+    });
+
+    it('does not write the source of a recipe owned by someone else', async () => {
+      prisma.recipe.findUnique.mockResolvedValue({
+        ...ownedRecipe,
+        userId: 'someone-else',
+      });
+
+      await expect(
+        service.update('user-1', 'recipe-1', { sourceUrl }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.recipe.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a recipe line whose unit has no equivalent in the ingredient unit', async () => {
     await expect(
       service.create('user-1', {

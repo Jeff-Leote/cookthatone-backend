@@ -89,6 +89,7 @@ export class RecipesService {
         prepTimeMin: dto.prepTimeMin,
         cookTimeMin: dto.cookTimeMin,
         servings: dto.servings,
+        sourceUrl: dto.sourceUrl,
         recipeIngredients: dto.ingredients?.length
           ? {
               create: dto.ingredients.map((ingredient) => ({
