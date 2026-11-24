@@ -12,11 +12,13 @@ import {
   httpUrlMessage,
   IsHttpUrl,
 } from '../../common/decorators/is-http-url.decorator';
+import { Capitalize } from '../../common/decorators/capitalize.decorator';
 import { Sanitize } from '../../common/decorators/sanitize.decorator';
 
 export class UpdateRecipeDto {
   @IsOptional()
   @Sanitize()
+  @Capitalize()
   @IsString({ message: 'Le titre doit être une chaîne de caractères' })
   @IsNotEmpty({ message: 'Le titre ne peut pas être vide' })
   title?: string;

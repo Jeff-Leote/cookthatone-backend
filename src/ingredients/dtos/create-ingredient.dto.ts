@@ -8,10 +8,12 @@ import {
   Max,
 } from 'class-validator';
 import { Unit } from '@prisma/client';
+import { Capitalize } from '../../common/decorators/capitalize.decorator';
 import { Sanitize } from '../../common/decorators/sanitize.decorator';
 
 export class CreateIngredientDto {
   @Sanitize()
+  @Capitalize()
   @IsString({ message: 'Le nom doit être une chaîne de caractères' })
   @IsNotEmpty({ message: 'Le nom est requis' })
   name: string;

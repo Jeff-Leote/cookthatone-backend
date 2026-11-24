@@ -16,12 +16,14 @@ import {
   httpUrlMessage,
   IsHttpUrl,
 } from '../../common/decorators/is-http-url.decorator';
+import { Capitalize } from '../../common/decorators/capitalize.decorator';
 import { Sanitize } from '../../common/decorators/sanitize.decorator';
 import { RecipeIngredientDto } from './recipe-ingredient.dto';
 import { RecipeStepDto } from './recipe-step.dto';
 
 export class CreateRecipeDto {
   @Sanitize()
+  @Capitalize()
   @IsString({ message: 'Le titre doit être une chaîne de caractères' })
   @IsNotEmpty({ message: 'Le titre est requis' })
   title: string;
